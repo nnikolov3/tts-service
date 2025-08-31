@@ -1,0 +1,35 @@
+[tts]
+# TTS Service Configuration
+model_path = "models/Llama-OuteTTS-1.0-1B-Q8_0.gguf"
+service_host = "127.0.0.1"
+service_port = 8000
+use_http_service = true
+workers = 4
+timeout_seconds = 300
+gpu_memory_limit_gb = 5.5
+use_gpu = true
+device = "auto"
+quality = "high"
+temperature = 0.75
+repetition_penalty = 1.1
+repetition_range = 64
+top_k = 40
+top_p = 0.9
+min_p = 0.05
+mirostat = true
+mirostat_tau = 5.0
+mirostat_eta = 0.1
+
+[paths]
+# Directory paths
+input_dir = "input"
+output_dir = "output"
+logs_dir = "logs"
+models_dir = "models"
+
+[logging]
+# Logging configuration
+level = "info"
+log_dir = "logs/tts"
+max_file_size_mb = 100
+max_files = 10
