@@ -19,6 +19,11 @@ import (
 	"time"
 )
 
+const (
+	// DefaultTimeout defines the default timeout for HTTP client operations.
+	DefaultTimeout = 60 * time.Second
+)
+
 // Error messages.
 const (
 	errFailedToOpenFile        = "failed to open audio file: %w"
@@ -55,10 +60,16 @@ const (
 	envOpenAIAPIKey = "OPENAI_API_KEY"
 )
 
-// Environment variable error messages.
-const (
-	errOpenAIAPIKeyNotSet = "OPENAI_API_KEY environment variable not set"
+// Static errors.
+var (
+	ErrOpenAIAPIKeyNotSet = errors.New("OPENAI_API_KEY environment variable not set")
+	ErrAPIRequestFailed   = errors.New("API request failed")
 )
+
+// Helper functions for dynamic error messages.
+func newAPIRequestFailedError(statusCode int, body string) error {
+	return fmt.Errorf("%w with status %d: %s", ErrAPIRequestFailed, statusCode, body)
+}
 
 // Client provides Whisper API client functionality.
 type Client struct {
@@ -85,212 +96,265 @@ func NewClient(apiKey string) *Client {
 		apiKey:  apiKey,
 		baseURL: "https://api.openai.com/v1/audio/transcriptions",
 		httpClient: &http.Client{
-			Timeout: 60 * time.Second,
+			Transport:     nil,
+			CheckRedirect: nil,
+			Jar:           nil,
+			Timeout:       DefaultTimeout,
 		},
 	}
 }
 
 // TranscribeFile transcribes an audio file using Whisper API.
 func (c *Client) TranscribeFile(audioPath, model, language string) (string, error) {
-	// Open the audio file
-	file, err := os.Open(audioPath)
-	if err != nil {
-		return "", fmt.Errorf(errFailedToOpenFile, err)
+	formData, contentType, formErr := c.createBasicMultipartForm(
+		audioPath,
+		model,
+		language,
+	)
+	if formErr != nil {
+		return "", formErr
 	}
 
-	defer func() {
-		closeErr := file.Close()
-		if closeErr != nil {
-			// Log the error but don't fail the operation
-			log.Printf(errFailedToCloseFile, closeErr)
-		}
-	}()
-
-	// Create multipart form data
-	var buf bytes.Buffer
-
-	writer := multipart.NewWriter(&buf)
-
-	// Add file
-	part, err := writer.CreateFormFile(formFieldFile, filepath.Base(audioPath))
-	if err != nil {
-		return "", fmt.Errorf(errFailedToCreateFormFile, err)
-	}
-
-	_, err = io.Copy(part, file)
-	if err != nil {
-		return "", fmt.Errorf(errFailedToCopyFileData, err)
-	}
-
-	// Add model
-	err = writer.WriteField(formFieldModel, model)
-	if err != nil {
-		return "", fmt.Errorf(errFailedToWriteModelField, err)
-	}
-
-	// Add language if specified
-	if language != "" {
-		err = writer.WriteField(formFieldLanguage, language)
-		if err != nil {
-			return "", fmt.Errorf(errFailedToWriteLangField, err)
-		}
-	}
-
-	closeErr := writer.Close()
-	if closeErr != nil {
-		return "", fmt.Errorf(errFailedToCloseWriter, closeErr)
-	}
-
-	// Create HTTP request
-	req, err := http.NewRequest(http.MethodPost, c.baseURL, &buf)
-	if err != nil {
-		return "", fmt.Errorf(errFailedToCreateRequest, err)
-	}
-
-	req.Header.Set(headerAuthorization, "Bearer "+c.apiKey)
-	req.Header.Set(headerContentType, writer.FormDataContentType())
-
-	// Make the request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf(errFailedToMakeRequest, err)
-	}
-
-	defer func() {
-		closeErr := resp.Body.Close()
-		if closeErr != nil {
-			// Log the error but don't fail the operation
-			log.Printf(errFailedToCloseRespBody, closeErr)
-		}
-	}()
-
-	// Check response status
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-
-		return "", fmt.Errorf(
-			errAPIRequestFailed,
-			resp.StatusCode,
-			string(body),
-		)
-	}
-
-	// Parse response
-	var whisperResp Response
-	if err := json.NewDecoder(resp.Body).Decode(&whisperResp); err != nil {
-		return "", fmt.Errorf(errFailedToDecodeResponse, err)
-	}
-
-	return whisperResp.Text, nil
+	return c.executeBasicTranscriptionRequest(formData, contentType)
 }
 
 // TranscribeFileWithWordTimestamps transcribes an audio file with word-level timestamps.
 func (c *Client) TranscribeFileWithWordTimestamps(
 	audioPath, model, language string,
 ) (map[string]any, error) {
-	// Open the audio file
-	file, err := os.Open(audioPath)
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToOpenFile, err)
+	formData, contentType, formErr := c.createTimestampMultipartForm(
+		audioPath,
+		model,
+		language,
+	)
+	if formErr != nil {
+		return nil, formErr
+	}
+
+	return c.executeTranscriptionRequest(formData, contentType)
+}
+
+func (c *Client) openAndCopyFile(audioPath string, writer *multipart.Writer) error {
+	file, fileOpenErr := os.Open(audioPath)
+	if fileOpenErr != nil {
+		return fmt.Errorf(errFailedToOpenFile, fileOpenErr)
 	}
 
 	defer func() {
-		closeErr := file.Close()
-		if closeErr != nil {
-			// Log the error but don't fail the operation
-			log.Printf(errFailedToCloseFile, closeErr)
+		fileCloseErr := file.Close()
+		if fileCloseErr != nil {
+			log.Printf(errFailedToCloseFile, fileCloseErr)
 		}
 	}()
 
-	// Create multipart form data
+	part, partErr := writer.CreateFormFile(formFieldFile, filepath.Base(audioPath))
+	if partErr != nil {
+		return fmt.Errorf(errFailedToCreateFormFile, partErr)
+	}
+
+	_, copyErr := io.Copy(part, file)
+	if copyErr != nil {
+		return fmt.Errorf(errFailedToCopyFileData, copyErr)
+	}
+
+	return nil
+}
+
+func (c *Client) addBasicFormFields(
+	writer *multipart.Writer,
+	model, language string,
+) error {
+	modelErr := writer.WriteField(formFieldModel, model)
+	if modelErr != nil {
+		return fmt.Errorf(errFailedToWriteModelField, modelErr)
+	}
+
+	if language != "" {
+		langErr := writer.WriteField(formFieldLanguage, language)
+		if langErr != nil {
+			return fmt.Errorf(errFailedToWriteLangField, langErr)
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) createBasicMultipartForm(
+	audioPath, model, language string,
+) (*bytes.Buffer, string, error) {
 	var buf bytes.Buffer
 
 	writer := multipart.NewWriter(&buf)
 
-	// Add file
-	part, err := writer.CreateFormFile(formFieldFile, filepath.Base(audioPath))
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToCreateFormFile, err)
+	fileErr := c.openAndCopyFile(audioPath, writer)
+	if fileErr != nil {
+		return nil, "", fileErr
 	}
 
-	_, err = io.Copy(part, file)
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToCopyFileData, err)
+	fieldsErr := c.addBasicFormFields(writer, model, language)
+	if fieldsErr != nil {
+		return nil, "", fieldsErr
 	}
 
-	// Add model
-	err = writer.WriteField(formFieldModel, model)
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToWriteModelField, err)
+	writerCloseErr := writer.Close()
+	if writerCloseErr != nil {
+		return nil, "", fmt.Errorf(errFailedToCloseWriter, writerCloseErr)
 	}
 
-	// Add word timestamps flag
-	err = writer.WriteField(formFieldResponseFormat, "verbose_json")
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToWriteRespFormat, err)
-	}
+	return &buf, writer.FormDataContentType(), nil
+}
 
-	// Add language if specified
-	if language != "" {
-		err = writer.WriteField(formFieldLanguage, language)
-		if err != nil {
-			return nil, fmt.Errorf(errFailedToWriteLangField, err)
-		}
-	}
-
-	closeErr := writer.Close()
-	if closeErr != nil {
-		return nil, fmt.Errorf(errFailedToCloseWriter, closeErr)
-	}
-
-	// Create HTTP request
-	req, err := http.NewRequest(http.MethodPost, c.baseURL, &buf)
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToCreateRequest, err)
+func (c *Client) createHTTPRequest(
+	formData *bytes.Buffer,
+	contentType string,
+) (*http.Request, error) {
+	req, reqErr := http.NewRequest(http.MethodPost, c.baseURL, formData)
+	if reqErr != nil {
+		return nil, fmt.Errorf(errFailedToCreateRequest, reqErr)
 	}
 
 	req.Header.Set(headerAuthorization, "Bearer "+c.apiKey)
-	req.Header.Set(headerContentType, writer.FormDataContentType())
+	req.Header.Set(headerContentType, contentType)
 
-	// Make the request
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf(errFailedToMakeRequest, err)
-	}
+	return req, nil
+}
 
-	defer func() {
-		closeErr := resp.Body.Close()
-		if closeErr != nil {
-			// Log the error but don't fail the operation
-			log.Printf(errFailedToCloseRespBody, closeErr)
-		}
-	}()
-
-	// Check response status
+func (c *Client) handleBasicResponse(resp *http.Response) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 
-		return nil, fmt.Errorf(
-			errAPIRequestFailed,
-			resp.StatusCode,
-			string(body),
-		)
+		return "", newAPIRequestFailedError(resp.StatusCode, string(body))
 	}
 
-	// Parse response
+	var whisperResp Response
+
+	decodeErr := json.NewDecoder(resp.Body).Decode(&whisperResp)
+	if decodeErr != nil {
+		return "", fmt.Errorf(errFailedToDecodeResponse, decodeErr)
+	}
+
+	return whisperResp.Text, nil
+}
+
+func (c *Client) executeBasicTranscriptionRequest(
+	formData *bytes.Buffer,
+	contentType string,
+) (string, error) {
+	req, reqErr := c.createHTTPRequest(formData, contentType)
+	if reqErr != nil {
+		return "", reqErr
+	}
+
+	resp, doErr := c.httpClient.Do(req)
+	if doErr != nil {
+		return "", fmt.Errorf(errFailedToMakeRequest, doErr)
+	}
+
+	defer func() {
+		respCloseErr := resp.Body.Close()
+		if respCloseErr != nil {
+			log.Printf(errFailedToCloseRespBody, respCloseErr)
+		}
+	}()
+
+	return c.handleBasicResponse(resp)
+}
+
+func (c *Client) addTimestampFormFields(
+	writer *multipart.Writer,
+	model, language string,
+) error {
+	modelErr := writer.WriteField(formFieldModel, model)
+	if modelErr != nil {
+		return fmt.Errorf(errFailedToWriteModelField, modelErr)
+	}
+
+	formatErr := writer.WriteField(formFieldResponseFormat, "verbose_json")
+	if formatErr != nil {
+		return fmt.Errorf(errFailedToWriteRespFormat, formatErr)
+	}
+
+	if language != "" {
+		langErr := writer.WriteField(formFieldLanguage, language)
+		if langErr != nil {
+			return fmt.Errorf(errFailedToWriteLangField, langErr)
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) createTimestampMultipartForm(
+	audioPath, model, language string,
+) (*bytes.Buffer, string, error) {
+	var buf bytes.Buffer
+
+	writer := multipart.NewWriter(&buf)
+
+	fileErr := c.openAndCopyFile(audioPath, writer)
+	if fileErr != nil {
+		return nil, "", fileErr
+	}
+
+	fieldsErr := c.addTimestampFormFields(writer, model, language)
+	if fieldsErr != nil {
+		return nil, "", fieldsErr
+	}
+
+	writerCloseErr := writer.Close()
+	if writerCloseErr != nil {
+		return nil, "", fmt.Errorf(errFailedToCloseWriter, writerCloseErr)
+	}
+
+	return &buf, writer.FormDataContentType(), nil
+}
+
+func (c *Client) handleTimestampResponse(resp *http.Response) (map[string]any, error) {
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+
+		return nil, newAPIRequestFailedError(resp.StatusCode, string(body))
+	}
+
 	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf(errFailedToDecodeResponse, err)
+
+	decodeErr := json.NewDecoder(resp.Body).Decode(&result)
+	if decodeErr != nil {
+		return nil, fmt.Errorf(errFailedToDecodeResponse, decodeErr)
 	}
 
 	return result, nil
+}
+
+func (c *Client) executeTranscriptionRequest(
+	formData *bytes.Buffer,
+	contentType string,
+) (map[string]any, error) {
+	req, reqErr := c.createHTTPRequest(formData, contentType)
+	if reqErr != nil {
+		return nil, reqErr
+	}
+
+	resp, doErr := c.httpClient.Do(req)
+	if doErr != nil {
+		return nil, fmt.Errorf(errFailedToMakeRequest, doErr)
+	}
+
+	defer func() {
+		respCloseErr := resp.Body.Close()
+		if respCloseErr != nil {
+			log.Printf(errFailedToCloseRespBody, respCloseErr)
+		}
+	}()
+
+	return c.handleTimestampResponse(resp)
 }
 
 // TranscribeOnce is a convenience function for single transcription.
 func TranscribeOnce(audioPath, model, language string) (string, error) {
 	apiKey := os.Getenv(envOpenAIAPIKey)
 	if apiKey == "" {
-		return "", errors.New(errOpenAIAPIKeyNotSet)
+		return "", ErrOpenAIAPIKeyNotSet
 	}
 
 	client := NewClient(apiKey)
@@ -305,7 +369,7 @@ func TranscribeOnceWithWordTimestamps(
 ) (map[string]any, error) {
 	apiKey := os.Getenv(envOpenAIAPIKey)
 	if apiKey == "" {
-		return nil, errors.New(errOpenAIAPIKeyNotSet)
+		return nil, ErrOpenAIAPIKeyNotSet
 	}
 
 	client := NewClient(apiKey)

@@ -26,6 +26,7 @@ input_dir = "input"
 output_dir = "output"
 logs_dir = "logs"
 models_dir = "models"
+speakers_dir = "speakers"
 
 [logging]
 # Logging configuration

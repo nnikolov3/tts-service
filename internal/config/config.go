@@ -15,6 +15,46 @@ import (
 	"github.com/nnikolov3/configurator"
 )
 
+// Static errors.
+var (
+	ErrModelPathEmpty   = errors.New("model_path cannot be empty")
+	ErrWorkersPositive  = errors.New("workers must be positive")
+	ErrTimeoutPositive  = errors.New("timeout_seconds must be positive")
+	ErrServiceHostEmpty = errors.New(
+		"service_host cannot be empty when using HTTP service",
+	)
+	ErrServicePortRange    = errors.New("service_port must be between 1 and 65535")
+	ErrGPUMemoryPositive   = errors.New("gpu_memory_limit_gb must be positive")
+	ErrTemperatureRange    = errors.New("temperature must be between 0 and 2")
+	ErrInvalidQuality      = errors.New("quality must be one of the valid options")
+	ErrFieldCannotBeEmpty  = errors.New("field cannot be empty")
+	ErrLogDirEmpty         = errors.New("log_dir cannot be empty")
+	ErrInvalidLevel        = errors.New("level must be one of the valid options")
+	ErrMaxFileSizePositive = errors.New("max_file_size_mb must be positive")
+	ErrMaxFilesPositive    = errors.New("max_files must be positive")
+)
+
+// Helper functions for dynamic error messages.
+func newInvalidQualityError(validQualities []string) error {
+	return fmt.Errorf(
+		"%w: %s",
+		ErrInvalidQuality,
+		strings.Join(validQualities, commaSeparator),
+	)
+}
+
+func newFieldCannotBeEmptyError(fieldName string) error {
+	return fmt.Errorf("%w: %s", ErrFieldCannotBeEmpty, fieldName)
+}
+
+func newInvalidLevelError(validLevels []string) error {
+	return fmt.Errorf(
+		"%w: %s",
+		ErrInvalidLevel,
+		strings.Join(validLevels, commaSeparator),
+	)
+}
+
 // Error messages.
 const (
 	errFailedToLoadProjectConfig = "failed to load project config: %w"
@@ -125,38 +165,6 @@ func Load(startDir string) (*Config, string, error) {
 	return &cfg, projectRoot, nil
 }
 
-// resolvePaths converts relative paths to absolute paths based on project root.
-func (c *Config) resolvePaths(projectRoot string) error {
-	// Resolve TTS model path if relative
-	if !filepath.IsAbs(c.TTS.ModelPath) {
-		c.TTS.ModelPath = filepath.Join(projectRoot, c.TTS.ModelPath)
-	}
-
-	// Resolve directory paths if relative
-	if !filepath.IsAbs(c.Paths.InputDir) {
-		c.Paths.InputDir = filepath.Join(projectRoot, c.Paths.InputDir)
-	}
-
-	if !filepath.IsAbs(c.Paths.OutputDir) {
-		c.Paths.OutputDir = filepath.Join(projectRoot, c.Paths.OutputDir)
-	}
-
-	if !filepath.IsAbs(c.Paths.LogsDir) {
-		c.Paths.LogsDir = filepath.Join(projectRoot, c.Paths.LogsDir)
-	}
-
-	if !filepath.IsAbs(c.Paths.ModelsDir) {
-		c.Paths.ModelsDir = filepath.Join(projectRoot, c.Paths.ModelsDir)
-	}
-
-	// Resolve logging directory if relative
-	if !filepath.IsAbs(c.Logging.LogDir) {
-		c.Logging.LogDir = filepath.Join(projectRoot, c.Logging.LogDir)
-	}
-
-	return nil
-}
-
 // Validate validates the configuration.
 func (c *Config) Validate() error {
 	err := c.TTS.Validate()
@@ -177,47 +185,20 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// Validate validates the TTS configuration.
+// Validate validates the TTS configuration by checking basic parameters,
+// HTTP service settings, and advanced parameters.
 func (c *TTSConfig) Validate() error {
-	if c.ModelPath == "" {
-		return errors.New(errModelPathEmpty)
+	basicErr := c.validateBasicParams()
+	if basicErr != nil {
+		return basicErr
 	}
 
-	if c.UseHTTPService {
-		if c.ServiceHost == "" {
-			return errors.New(errServiceHostEmpty)
-		}
-
-		if c.ServicePort <= 0 || c.ServicePort > 65535 {
-			return errors.New(errServicePortRange)
-		}
+	httpErr := c.validateHTTPService()
+	if httpErr != nil {
+		return httpErr
 	}
 
-	if c.Workers <= 0 {
-		return errors.New(errWorkersPositive)
-	}
-
-	if c.TimeoutSeconds <= 0 {
-		return errors.New(errTimeoutPositive)
-	}
-
-	if c.GPUMemoryLimitGB <= 0 {
-		return errors.New(errGPUMemoryPositive)
-	}
-
-	if c.Temperature < 0 || c.Temperature > 2 {
-		return errors.New(errTemperatureRange)
-	}
-
-	validQualities := []string{"fast", "balanced", "high"}
-	if !contains(validQualities, c.Quality) {
-		return fmt.Errorf(
-			errQualityMustBeOneOf,
-			strings.Join(validQualities, commaSeparator),
-		)
-	}
-
-	return nil
+	return c.validateAdvancedParams()
 }
 
 // Validate validates the paths configuration.
@@ -231,7 +212,7 @@ func (c *PathsConfig) Validate() error {
 
 	for name, path := range paths {
 		if path == "" {
-			return fmt.Errorf(errCannotBeEmpty, name)
+			return newFieldCannotBeEmptyError(name)
 		}
 	}
 
@@ -241,23 +222,20 @@ func (c *PathsConfig) Validate() error {
 // Validate validates the logging configuration.
 func (c *LoggingConfig) Validate() error {
 	if c.LogDir == "" {
-		return errors.New(errLogDirEmpty)
+		return ErrLogDirEmpty
 	}
 
 	validLevels := []string{"debug", "info", "warn", "error"}
 	if !contains(validLevels, c.Level) {
-		return fmt.Errorf(
-			errLevelMustBeOneOf,
-			strings.Join(validLevels, commaSeparator),
-		)
+		return newInvalidLevelError(validLevels)
 	}
 
 	if c.MaxFileSizeMB <= 0 {
-		return errors.New(errMaxFileSizePositive)
+		return ErrMaxFileSizePositive
 	}
 
 	if c.MaxFiles <= 0 {
-		return errors.New(errMaxFilesPositive)
+		return ErrMaxFilesPositive
 	}
 
 	return nil
@@ -281,6 +259,56 @@ func (c *TTSConfig) GetDevice() string {
 	return deviceCPU
 }
 
+// Validate validates the TTS configuration.
+func (c *TTSConfig) validateBasicParams() error {
+	if c.ModelPath == "" {
+		return ErrModelPathEmpty
+	}
+
+	if c.Workers <= 0 {
+		return ErrWorkersPositive
+	}
+
+	if c.TimeoutSeconds <= 0 {
+		return ErrTimeoutPositive
+	}
+
+	return nil
+}
+
+func (c *TTSConfig) validateHTTPService() error {
+	if !c.UseHTTPService {
+		return nil
+	}
+
+	if c.ServiceHost == "" {
+		return ErrServiceHostEmpty
+	}
+
+	if c.ServicePort <= 0 || c.ServicePort > 65535 {
+		return ErrServicePortRange
+	}
+
+	return nil
+}
+
+func (c *TTSConfig) validateAdvancedParams() error {
+	if c.GPUMemoryLimitGB <= 0 {
+		return ErrGPUMemoryPositive
+	}
+
+	if c.Temperature < 0 || c.Temperature > 2 {
+		return ErrTemperatureRange
+	}
+
+	validQualities := []string{"fast", "balanced", "high"}
+	if !contains(validQualities, c.Quality) {
+		return newInvalidQualityError(validQualities)
+	}
+
+	return nil
+}
+
 // EnsureDirectories creates all configured directories if they don't exist.
 func (c *Config) EnsureDirectories() error {
 	dirs := []string{
@@ -292,11 +320,50 @@ func (c *Config) EnsureDirectories() error {
 	}
 
 	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0o755)
+		err := os.MkdirAll(dir, 0o750)
 		if err != nil {
 			return fmt.Errorf(errFailedToCreateDir, dir, err)
 		}
 	}
+
+	return nil
+}
+
+// resolvePaths converts relative paths to absolute paths based on project root.
+func (c *Config) resolveTTSPath(projectRoot string) {
+	if !filepath.IsAbs(c.TTS.ModelPath) {
+		c.TTS.ModelPath = filepath.Join(projectRoot, c.TTS.ModelPath)
+	}
+}
+
+func (c *Config) resolveDirectoryPaths(projectRoot string) {
+	if !filepath.IsAbs(c.Paths.InputDir) {
+		c.Paths.InputDir = filepath.Join(projectRoot, c.Paths.InputDir)
+	}
+
+	if !filepath.IsAbs(c.Paths.OutputDir) {
+		c.Paths.OutputDir = filepath.Join(projectRoot, c.Paths.OutputDir)
+	}
+
+	if !filepath.IsAbs(c.Paths.LogsDir) {
+		c.Paths.LogsDir = filepath.Join(projectRoot, c.Paths.LogsDir)
+	}
+
+	if !filepath.IsAbs(c.Paths.ModelsDir) {
+		c.Paths.ModelsDir = filepath.Join(projectRoot, c.Paths.ModelsDir)
+	}
+}
+
+func (c *Config) resolveLoggingPath(projectRoot string) {
+	if !filepath.IsAbs(c.Logging.LogDir) {
+		c.Logging.LogDir = filepath.Join(projectRoot, c.Logging.LogDir)
+	}
+}
+
+func (c *Config) resolvePaths(projectRoot string) error {
+	c.resolveTTSPath(projectRoot)
+	c.resolveDirectoryPaths(projectRoot)
+	c.resolveLoggingPath(projectRoot)
 
 	return nil
 }

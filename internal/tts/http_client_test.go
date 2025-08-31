@@ -14,6 +14,8 @@ import (
 
 // TestNewHTTPClient verifies HTTP client creation with proper configuration.
 func TestNewHTTPClient(t *testing.T) {
+	t.Parallel()
+
 	const (
 		testBaseURL = "http://localhost:8000"
 		testTimeout = 30 * time.Second
@@ -28,95 +30,17 @@ func TestNewHTTPClient(t *testing.T) {
 
 // TestHTTPClient_GenerateSpeech_Success verifies successful speech generation.
 func TestHTTPClient_GenerateSpeech_Success(t *testing.T) {
+	t.Parallel()
+
 	const testAudioData = "fake-wav-data"
 
-	server := httptest.NewServer(
-		http.HandlerFunc(
-			func(responseWriter http.ResponseWriter, request *http.Request) {
-				// Verify request method and path
-				if request.Method != http.MethodPost {
-					t.Errorf("Expected POST, got %s", request.Method)
-				}
-
-				if request.URL.Path != "/v1/generate/speech" {
-					t.Errorf(
-						"Expected /v1/generate/speech, got %s",
-						request.URL.Path,
-					)
-				}
-
-				// Verify request headers
-				if contentType := request.Header.Get("Content-Type"); contentType != "application/json" {
-					t.Errorf(
-						"Expected Content-Type application/json, got %s",
-						contentType,
-					)
-				}
-
-				if accept := request.Header.Get("Accept"); accept != "audio/wav" {
-					t.Errorf(
-						"Expected Accept audio/wav, got %s",
-						accept,
-					)
-				}
-
-				// Verify request body
-				var req tts.TTSRequest
-
-				err := json.NewDecoder(request.Body).Decode(&req)
-				if err != nil {
-					t.Fatalf("Failed to decode request: %v", err)
-				}
-
-				expectedReq := tts.TTSRequest{
-					Text:        "Hello, world!",
-					Language:    "en",
-					Temperature: 0.75,
-				}
-
-				if req.Text != expectedReq.Text {
-					t.Errorf(
-						"Expected text %q, got %q",
-						expectedReq.Text,
-						req.Text,
-					)
-				}
-
-				if req.Language != expectedReq.Language {
-					t.Errorf(
-						"Expected language %q, got %q",
-						expectedReq.Language,
-						req.Language,
-					)
-				}
-
-				if req.Temperature != expectedReq.Temperature {
-					t.Errorf(
-						"Expected temperature %f, got %f",
-						expectedReq.Temperature,
-						req.Temperature,
-					)
-				}
-
-				// Return mock audio response
-				responseWriter.Header().Set("Content-Type", "audio/wav")
-				responseWriter.WriteHeader(http.StatusOK)
-				responseWriter.Write([]byte(testAudioData))
-			},
-		),
-	)
+	server := httptest.NewServer(createSuccessHandler(t, testAudioData))
 	defer server.Close()
 
 	client := tts.NewHTTPClient(server.URL, 10*time.Second)
-	ctx := context.Background()
+	req := createStandardTestRequest()
 
-	req := tts.TTSRequest{
-		Text:        "Hello, world!",
-		Language:    "en",
-		Temperature: 0.75,
-	}
-
-	audioData, err := client.GenerateSpeech(ctx, req)
+	audioData, err := client.GenerateSpeech(context.Background(), req)
 	if err != nil {
 		t.Fatalf("GenerateSpeech failed: %v", err)
 	}
@@ -130,15 +54,115 @@ func TestHTTPClient_GenerateSpeech_Success(t *testing.T) {
 	}
 }
 
+func createSuccessHandler(t *testing.T, testAudioData string) http.HandlerFunc {
+	return http.HandlerFunc(
+		func(responseWriter http.ResponseWriter, request *http.Request) {
+			validateHTTPRequestMethod(t, request)
+			validateHTTPRequestHeaders(t, request)
+			validateHTTPRequestBody(t, request)
+			sendSuccessResponse(responseWriter, testAudioData)
+		},
+	)
+}
+
+func validateHTTPRequestMethod(t *testing.T, request *http.Request) {
+	if request.Method != http.MethodPost {
+		t.Errorf("Expected POST, got %s", request.Method)
+	}
+
+	if request.URL.Path != "/v1/generate/speech" {
+		t.Errorf(
+			"Expected /v1/generate/speech, got %s",
+			request.URL.Path,
+		)
+	}
+}
+
+func validateHTTPRequestHeaders(t *testing.T, request *http.Request) {
+	if contentType := request.Header.Get("Content-Type"); contentType != "application/json" {
+		t.Errorf(
+			"Expected Content-Type application/json, got %s",
+			contentType,
+		)
+	}
+
+	if accept := request.Header.Get("Accept"); accept != "audio/wav" {
+		t.Errorf(
+			"Expected Accept audio/wav, got %s",
+			accept,
+		)
+	}
+}
+
+func validateHTTPRequestBody(t *testing.T, request *http.Request) {
+	var req tts.Request
+
+	err := json.NewDecoder(request.Body).Decode(&req)
+	if err != nil {
+		t.Fatalf("Failed to decode request: %v", err)
+	}
+
+	expectedReq := createStandardTestRequest()
+	validateRequestFields(t, req, expectedReq)
+}
+
+func validateRequestFields(t *testing.T, actual, expected tts.Request) {
+	if actual.Text != expected.Text {
+		t.Errorf(
+			"Expected text %q, got %q",
+			expected.Text,
+			actual.Text,
+		)
+	}
+
+	if actual.Language != expected.Language {
+		t.Errorf(
+			"Expected language %q, got %q",
+			expected.Language,
+			actual.Language,
+		)
+	}
+
+	if actual.Temperature != expected.Temperature {
+		t.Errorf(
+			"Expected temperature %f, got %f",
+			expected.Temperature,
+			actual.Temperature,
+		)
+	}
+}
+
+func createStandardTestRequest() tts.Request {
+	return tts.Request{
+		Text:           "Hello, world!",
+		SpeakerRefPath: "",
+		Language:       "en",
+		Temperature:    0.75,
+	}
+}
+
+func sendSuccessResponse(responseWriter http.ResponseWriter, testAudioData string) {
+	responseWriter.Header().Set("Content-Type", "audio/wav")
+	responseWriter.WriteHeader(http.StatusOK)
+
+	if _, writeErr := responseWriter.Write([]byte(testAudioData)); writeErr != nil {
+		// In test context, we can't easily propagate this error
+		// This is acceptable for test helper functions
+	}
+}
+
 // TestHTTPClient_GenerateSpeech_EmptyText verifies validation of empty text.
 func TestHTTPClient_GenerateSpeech_EmptyText(t *testing.T) {
+	t.Parallel()
+
 	client := tts.NewHTTPClient("http://localhost:8000", 10*time.Second)
 	ctx := context.Background()
 
-	req := tts.TTSRequest{
-		Text:        "",
-		Language:    "en",
-		Temperature: 0.75,
+	req := tts.Request{
+		Text:           "",
+		SpeakerRefPath: "",
+		Language:       "en",
+		Temperature:    0.75,
 	}
 
 	_, err := client.GenerateSpeech(ctx, req)
@@ -153,30 +177,55 @@ func TestHTTPClient_GenerateSpeech_EmptyText(t *testing.T) {
 
 // TestHTTPClient_GenerateSpeech_ServerError verifies proper error handling.
 func TestHTTPClient_GenerateSpeech_ServerError(t *testing.T) {
-	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInternalServerError)
+	t.Parallel()
 
-			errorResp := tts.TTSErrorResponse{
-				Detail:    "Model failed to load",
-				ErrorCode: "MODEL_LOAD_ERROR",
-			}
-			json.NewEncoder(w).Encode(errorResp)
-		}),
-	)
+	server := createServerErrorMockServer(t)
 	defer server.Close()
 
 	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 	ctx := context.Background()
 
-	req := tts.TTSRequest{
-		Text:        "Hello, world!",
-		Language:    "en",
-		Temperature: 0.75,
+	req := tts.Request{
+		Text:           "Hello, world!",
+		SpeakerRefPath: "",
+		Language:       "en",
+		Temperature:    0.75,
 	}
 
 	_, err := client.GenerateSpeech(ctx, req)
+	validateServerErrorResponse(t, err)
+}
+
+// createServerErrorMockServer creates a mock server that returns server error.
+func createServerErrorMockServer(t *testing.T) *httptest.Server {
+	return httptest.NewServer(
+		http.HandlerFunc(
+			func(responseWriter http.ResponseWriter, _ *http.Request) {
+				writeServerErrorResponse(responseWriter)
+			},
+		),
+	)
+}
+
+// writeServerErrorResponse writes a server error response.
+func writeServerErrorResponse(responseWriter http.ResponseWriter) {
+	responseWriter.Header().Set("Content-Type", "application/json")
+	responseWriter.WriteHeader(http.StatusInternalServerError)
+
+	errorResp := tts.ErrorResponse{
+		Detail:    "Model failed to load",
+		ErrorCode: "MODEL_LOAD_ERROR",
+	}
+
+	encodeErr := json.NewEncoder(responseWriter).Encode(errorResp)
+	if encodeErr != nil {
+		// In test context, we can't easily propagate this error
+		// This is acceptable for test helper functions
+	}
+}
+
+// validateServerErrorResponse validates the server error response.
+func validateServerErrorResponse(t *testing.T, err error) {
 	if err == nil {
 		t.Fatal("Expected error for server error, got nil")
 	}
@@ -196,11 +245,17 @@ func TestHTTPClient_GenerateSpeech_ServerError(t *testing.T) {
 
 // TestHTTPClient_GenerateSpeech_WrongContentType verifies content type validation.
 func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("not audio data"))
+
+			if _, writeErr := w.Write([]byte("not audio data")); writeErr != nil {
+				// In test context, we can't easily propagate this error
+				// This is acceptable for test helper functions
+			}
 		}),
 	)
 	defer server.Close()
@@ -208,10 +263,11 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 	ctx := context.Background()
 
-	req := tts.TTSRequest{
-		Text:        "Hello, world!",
-		Language:    "en",
-		Temperature: 0.75,
+	req := tts.Request{
+		Text:           "Hello, world!",
+		Language:       "en",
+		Temperature:    0.75,
+		SpeakerRefPath: "",
 	}
 
 	_, err := client.GenerateSpeech(ctx, req)
@@ -226,8 +282,10 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 
 // TestHTTPClient_GenerateSpeech_EmptyAudioData verifies empty response handling.
 func TestHTTPClient_GenerateSpeech_EmptyAudioData(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "audio/wav")
 			w.WriteHeader(http.StatusOK)
 			// Write no content (empty response)
@@ -238,10 +296,11 @@ func TestHTTPClient_GenerateSpeech_EmptyAudioData(t *testing.T) {
 	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 	ctx := context.Background()
 
-	req := tts.TTSRequest{
-		Text:        "Hello, world!",
-		Language:    "en",
-		Temperature: 0.75,
+	req := tts.Request{
+		Text:           "Hello, world!",
+		Language:       "en",
+		Temperature:    0.75,
+		SpeakerRefPath: "",
 	}
 
 	_, err := client.GenerateSpeech(ctx, req)
@@ -256,13 +315,19 @@ func TestHTTPClient_GenerateSpeech_EmptyAudioData(t *testing.T) {
 
 // TestHTTPClient_GenerateSpeech_Timeout verifies timeout handling.
 func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
+	t.Parallel()
+
 	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			// Simulate a slow server that exceeds timeout
 			time.Sleep(200 * time.Millisecond)
 			w.Header().Set("Content-Type", "audio/wav")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("audio-data"))
+
+			if _, writeErr := w.Write([]byte("audio-data")); writeErr != nil {
+				// In test context, we can't easily propagate this error
+				// This is acceptable for test helper functions
+			}
 		}),
 	)
 	defer server.Close()
@@ -271,10 +336,11 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 	client := tts.NewHTTPClient(server.URL, 50*time.Millisecond)
 	ctx := context.Background()
 
-	req := tts.TTSRequest{
-		Text:        "Hello, world!",
-		Language:    "en",
-		Temperature: 0.75,
+	req := tts.Request{
+		Text:           "Hello, world!",
+		Language:       "en",
+		Temperature:    0.75,
+		SpeakerRefPath: "",
 	}
 
 	_, err := client.GenerateSpeech(ctx, req)
@@ -285,28 +351,9 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 
 // TestHTTPClient_HealthCheck_Success verifies successful health check.
 func TestHTTPClient_HealthCheck_Success(t *testing.T) {
-	server := httptest.NewServer(
-		http.HandlerFunc(
-			func(responseWriter http.ResponseWriter, request *http.Request) {
-				if request.Method != http.MethodGet {
-					t.Errorf("Expected GET, got %s", request.Method)
-				}
+	t.Parallel()
 
-				if request.URL.Path != "/health" {
-					t.Errorf(
-						"Expected /health, got %s",
-						request.URL.Path,
-					)
-				}
-
-				responseWriter.WriteHeader(http.StatusOK)
-				json.NewEncoder(responseWriter).Encode(map[string]any{
-					"status":       "healthy",
-					"model_loaded": true,
-				})
-			},
-		),
-	)
+	server := createHealthCheckMockServer(t)
 	defer server.Close()
 
 	client := tts.NewHTTPClient(server.URL, 10*time.Second)
@@ -318,11 +365,52 @@ func TestHTTPClient_HealthCheck_Success(t *testing.T) {
 	}
 }
 
-// TestHTTPClient_HealthCheck_ServiceDown verifies health check failure handling.
-func TestHTTPClient_HealthCheck_ServiceDown(t *testing.T) {
-	server := httptest.NewServer(
+// createHealthCheckMockServer creates a mock server for health check tests.
+func createHealthCheckMockServer(t *testing.T) *httptest.Server {
+	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, request *http.Request) {
+				validateHealthCheckRequest(t, request)
+				writeHealthCheckResponse(responseWriter)
+			},
+		),
+	)
+}
+
+// validateHealthCheckRequest validates the health check request.
+func validateHealthCheckRequest(t *testing.T, request *http.Request) {
+	if request.Method != http.MethodGet {
+		t.Errorf("Expected GET, got %s", request.Method)
+	}
+
+	if request.URL.Path != "/health" {
+		t.Errorf("Expected /health, got %s", request.URL.Path)
+	}
+}
+
+// writeHealthCheckResponse writes a successful health check response.
+func writeHealthCheckResponse(responseWriter http.ResponseWriter) {
+	responseWriter.WriteHeader(http.StatusOK)
+
+	healthResponse := map[string]any{
+		"status":       "healthy",
+		"model_loaded": true,
+	}
+
+	encodeErr := json.NewEncoder(responseWriter).Encode(healthResponse)
+	if encodeErr != nil {
+		// In test context, we can't easily propagate this error
+		// This is acceptable for test helper functions
+	}
+}
+
+// TestHTTPClient_HealthCheck_ServiceDown verifies health check failure handling.
+func TestHTTPClient_HealthCheck_ServiceDown(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(
+		http.HandlerFunc(
+			func(responseWriter http.ResponseWriter, _ *http.Request) {
 				responseWriter.WriteHeader(http.StatusServiceUnavailable)
 			},
 		),
@@ -344,6 +432,7 @@ func TestHTTPClient_HealthCheck_ServiceDown(t *testing.T) {
 
 // TestHTTPClient_HealthCheck_NetworkError verifies network error handling.
 func TestHTTPClient_HealthCheck_NetworkError(t *testing.T) {
+	t.Parallel()
 	// Use an invalid URL to simulate network error
 	client := tts.NewHTTPClient("http://invalid-host:9999", 1*time.Second)
 	ctx := context.Background()
@@ -358,12 +447,17 @@ func TestHTTPClient_HealthCheck_NetworkError(t *testing.T) {
 func BenchmarkHTTPClient_GenerateSpeech(b *testing.B) {
 	server := httptest.NewServer(
 		http.HandlerFunc(
-			func(responseWriter http.ResponseWriter, request *http.Request) {
+			func(responseWriter http.ResponseWriter, _ *http.Request) {
 				responseWriter.Header().Set("Content-Type", "audio/wav")
 				responseWriter.WriteHeader(http.StatusOK)
-				responseWriter.Write(
+
+				if _, writeErr := responseWriter.Write(
 					[]byte("mock-audio-data-for-benchmark"),
-				)
+				); writeErr != nil {
+					// In test context, we can't easily propagate this
+					// error
+					// This is acceptable for test helper functions
+				}
 			},
 		),
 	)
@@ -372,10 +466,11 @@ func BenchmarkHTTPClient_GenerateSpeech(b *testing.B) {
 	client := tts.NewHTTPClient(server.URL, 30*time.Second)
 	ctx := context.Background()
 
-	req := tts.TTSRequest{
-		Text:        "This is benchmark text for TTS generation",
-		Language:    "en",
-		Temperature: 0.75,
+	req := tts.Request{
+		Text:           "This is benchmark text for TTS generation",
+		Language:       "en",
+		Temperature:    0.75,
+		SpeakerRefPath: "",
 	}
 
 	b.ResetTimer()

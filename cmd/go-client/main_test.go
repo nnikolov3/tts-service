@@ -1,31 +1,32 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"os"
 	"strings"
 	"testing"
 )
 
-// Test constants, updated to follow ALL_CAPS convention.
+// Test constants, updated to follow CamelCase convention.
 const (
-	TEST_EXPECTED_TEXT_FLAG   = "Expected text flag %q, got %q"
-	ERR_EITHER_TEXT_OR_CHUNKS = "Either --text or --chunks must be provided"
-	ERR_CANNOT_SPECIFY_BOTH   = "Cannot specify both --text and --chunks"
+	TestExpectedTextFlag      = "Expected text flag %q, got %q"
+	TestErrEitherTextOrChunks = "Either --text or --chunks must be provided"
+	TestErrCannotSpecifyBoth  = "Cannot specify both --text and --chunks"
 )
 
 // TestMainFlags verifies that command-line flags are parsed correctly.
 // This test uses a table-driven structure for clarity and extensibility.
 func TestMainFlags(t *testing.T) {
+	t.Parallel()
 	// Save original command line args to restore them after the test.
 	oldArgs := os.Args
+
 	defer func() { os.Args = oldArgs }()
 
 	tests := []struct {
 		name     string
-		args     []string
 		wantText string
+		args     []string
 	}{
 		{
 			name:     "text flag parsing",
@@ -34,23 +35,25 @@ func TestMainFlags(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			// Reset flag parsing state for each test run to ensure isolation.
 			flag.CommandLine = flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 
 			// Set test-specific arguments.
-			os.Args = tt.args
+			os.Args = testCase.args
 
-			// Define and parse the flags, simulating the main function's setup.
+			// Define and parse the flags, simulating the main function's
+			// setup.
 			textFlag := flag.String(flagText, "", flagTextDesc)
 			flag.Parse()
 
 			// Assert that the parsed flag matches the expected value.
-			if *textFlag != tt.wantText {
+			if *textFlag != testCase.wantText {
 				t.Errorf(
-					TEST_EXPECTED_TEXT_FLAG,
-					tt.wantText,
+					TestExpectedTextFlag,
+					testCase.wantText,
 					*textFlag,
 				)
 			}
@@ -58,19 +61,42 @@ func TestMainFlags(t *testing.T) {
 	}
 }
 
-// TestArgumentValidation verifies the business logic for required and conflicting arguments.
+// TestArgumentValidation verifies the business logic for required and conflicting
+// arguments.
 // This replaces the previous non-functional placeholder test. It validates inputs at the
 // application's boundary, adhering to the principle of explicit error checking.
 func TestArgumentValidation(t *testing.T) {
-	// Save original command line args to restore them after the test.
+	t.Parallel()
+
 	oldArgs := os.Args
+
 	defer func() { os.Args = oldArgs }()
 
-	tests := []struct {
+	tests := getValidationTestCases()
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			flags := setupTestFlags(t, testCase)
+			err := validateArgumentsOnly(flags)
+			validateTestResult(t, testCase, err)
+		})
+	}
+}
+
+// getValidationTestCases returns test cases for argument validation.
+func getValidationTestCases() []struct {
+	name          string
+	expectedError string
+	args          []string
+	wantErr       bool
+} {
+	return []struct {
 		name          string
+		expectedError string
 		args          []string
 		wantErr       bool
-		expectedError string
 	}{
 		{
 			name:          "success with text flag",
@@ -85,81 +111,82 @@ func TestArgumentValidation(t *testing.T) {
 			expectedError: "",
 		},
 		{
-			name:          "error with both flags",
-			args:          []string{"cmd", "--text", "some text", "--chunks", "file.json"},
+			name: "error with both flags",
+			args: []string{
+				"cmd",
+				"--text",
+				"some text",
+				"--chunks",
+				"file.json",
+			},
 			wantErr:       true,
-			expectedError: ERR_CANNOT_SPECIFY_BOTH,
+			expectedError: TestErrCannotSpecifyBoth,
 		},
 		{
 			name:          "error with no flags",
 			args:          []string{"cmd"},
 			wantErr:       true,
-			expectedError: ERR_EITHER_TEXT_OR_CHUNKS,
+			expectedError: TestErrEitherTextOrChunks,
 		},
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Reset flag state and set args for the current test case.
-			flag.CommandLine = flag.NewFlagSet(tt.name, flag.ContinueOnError)
-			os.Args = tt.args
+// setupTestFlags prepares flags for a test case.
+func setupTestFlags(_ *testing.T, testCase struct {
+	name          string
+	expectedError string
+	args          []string
+	wantErr       bool
+},
+) appFlags {
+	flag.CommandLine = flag.NewFlagSet(testCase.name, flag.ContinueOnError)
+	os.Args = testCase.args
 
-			// Simulate parsing flags from main.go
-			var flags appFlags
-			flag.StringVar(&flags.text, flagText, "", flagTextDesc)
-			flag.StringVar(&flags.chunks, flagChunks, "", flagChunksDesc)
-			flag.Parse()
+	var flags appFlags
+	flag.StringVar(&flags.text, flagText, "", flagTextDesc)
+	flag.StringVar(&flags.chunks, flagChunks, "", flagChunksDesc)
+	flag.Parse()
 
-			// The core logic of the application should be in a function
-			// that returns an error, making it testable.
-			err := handleExecution(nil, nil, nil, flags)
+	return flags
+}
 
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("Expected an error but got none")
-					return
-				}
-				if !strings.Contains(err.Error(), tt.expectedError) {
-					t.Errorf(
-						"Expected error to contain %q, but got %q",
-						tt.expectedError,
-						err.Error(),
-					)
-				}
-			} else if err != nil {
-				t.Errorf("Did not expect an error, but got: %v", err)
-			}
-		})
+// validateTestResult checks if the test result matches expectations.
+func validateTestResult(t *testing.T, testCase struct {
+	name          string
+	expectedError string
+	args          []string
+	wantErr       bool
+}, err error,
+) {
+	if testCase.wantErr {
+		validateExpectedError(t, testCase.expectedError, err)
+
+		return
+	}
+
+	validateNoError(t, err)
+}
+
+// validateExpectedError checks that an expected error occurred.
+func validateExpectedError(t *testing.T, expectedError string, err error) {
+	if err == nil {
+		t.Errorf("Expected an error but got none")
+
+		return
+	}
+
+	if !strings.Contains(err.Error(), expectedError) {
+		t.Errorf(
+			"Expected error to contain %q, but got %q",
+			expectedError,
+			err.Error(),
+		)
 	}
 }
 
-/*
-NOTE: The following are mock/stub implementations required for the tests to compile.
-In a real scenario, these would be imported from the `main` package.
-*/
-
-// Mock constants from the main package.
-const (
-	flagText     = "text"
-	flagTextDesc = "Text to convert to speech"
-	flagChunks   = "chunks"
-)
-
-// Mock appFlags struct from the main package.
-type appFlags struct {
-	text   string
-	chunks string
-}
-
-// Mock handleExecution function from the main package to test validation logic.
-// A real test would import and call the actual function from main.go.
-func handleExecution(engine any, cfg any, logger any, flags appFlags) error {
-	if flags.text == "" && flags.chunks == "" {
-		return errors.New(ERR_EITHER_TEXT_OR_CHUNKS)
+// validateNoError checks that no error occurred when none was expected.
+func validateNoError(t *testing.T, err error) {
+	if err != nil {
+		t.Errorf("Did not expect an error, but got: %v", err)
 	}
-	if flags.text != "" && flags.chunks != "" {
-		return errors.New(ERR_CANNOT_SPECIFY_BOTH)
-	}
-	// In a real scenario, this would proceed with processing.
-	return nil
 }

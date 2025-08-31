@@ -11,39 +11,39 @@ import (
 	"time"
 )
 
-// Constants for default audio quality settings, now in ALL_CAPS.
+// Constants for default audio quality settings.
 const (
-	DEFAULT_SAMPLE_RATE = 44100 // Standard CD quality sample rate.
-	DEFAULT_BIT_DEPTH   = 16    // Standard CD quality bit depth.
-	DEFAULT_CHANNELS    = 2     // Stereo channels.
+	DefaultSampleRate = 44100 // Standard CD quality sample rate.
+	DefaultBitDepth   = 16    // Standard CD quality bit depth.
+	DefaultChannels   = 2     // Stereo channels.
 )
 
 // Constants for supported bit depths.
 const (
-	BIT_DEPTH_8  = 8
-	BIT_DEPTH_16 = 16
-	BIT_DEPTH_24 = 24
-	BIT_DEPTH_32 = 32
+	BitDepth8  = 8
+	BitDepth16 = 16
+	BitDepth24 = 24
+	BitDepth32 = 32
 )
 
 // Constants for quality validation limits.
 const (
-	MAX_SAMPLE_RATE      = 192000
-	MAX_CHANNELS         = 8
-	MAX_VOLUME           = 10.0
-	MAX_FILTER_FREQUENCY = 20000
+	MaxSampleRate      = 192000
+	MaxChannels        = 8
+	MaxVolume          = 10.0
+	MaxFilterFrequency = 20000
 )
 
-// Constants for error messages and formats, now in ALL_CAPS.
+// Constants for error messages and formats.
 const (
-	ERR_FMT_SAMPLE_RATE_RANGE     = "%w: sample rate must be between 1 and %d Hz"
-	ERR_FMT_BIT_DEPTH_VALUES      = "%w: bit depth must be 8, 16, 24, or 32"
-	ERR_FMT_CHANNELS_RANGE        = "%w: channels must be between 1 and %d"
-	ERR_FMT_FADE_IN_NON_NEGATIVE  = "%w: fade in must be non-negative"
-	ERR_FMT_FADE_OUT_NON_NEGATIVE = "%w: fade out must be non-negative"
-	ERR_FMT_HIGH_PASS_RANGE       = "%w: high pass filter must be between 0 and %d Hz"
-	ERR_FMT_LOW_PASS_RANGE        = "%w: low pass filter must be between 0 and %d Hz"
-	ERR_FMT_VOLUME_RANGE          = "%w: volume must be between 0.0 and %.1f"
+	ErrFmtSampleRateRange    = "%w: sample rate must be between 1 and %d Hz"
+	ErrFmtBitDepthValues     = "%w: bit depth must be 8, 16, 24, or 32"
+	ErrFmtChannelsRange      = "%w: channels must be between 1 and %d"
+	ErrFmtFadeInNonNegative  = "%w: fade in must be non-negative"
+	ErrFmtFadeOutNonNegative = "%w: fade out must be non-negative"
+	ErrFmtHighPassRange      = "%w: high pass filter must be between 0 and %d Hz"
+	ErrFmtLowPassRange       = "%w: low pass filter must be between 0 and %d Hz"
+	ErrFmtVolumeRange        = "%w: volume must be between 0.0 and %.1f"
 )
 
 // Common errors for the audio package.
@@ -55,12 +55,18 @@ var (
 type Format string
 
 const (
-	FORMAT_WAV  Format = "wav"
-	FORMAT_MP3  Format = "mp3"
-	FORMAT_FLAC Format = "flac"
-	FORMAT_OGG  Format = "ogg"
-	FORMAT_M4A  Format = "m4a"
-	FORMAT_AAC  Format = "aac"
+	// FormatWAV represents WAV audio format.
+	FormatWAV Format = "wav"
+	// FormatMP3 represents MP3 audio format.
+	FormatMP3 Format = "mp3"
+	// FormatFLAC represents FLAC audio format.
+	FormatFLAC Format = "flac"
+	// FormatOGG represents OGG audio format.
+	FormatOGG Format = "ogg"
+	// FormatM4A represents M4A audio format.
+	FormatM4A Format = "m4a"
+	// FormatAAC represents AAC audio format.
+	FormatAAC Format = "aac"
 )
 
 // Quality represents audio quality settings and post-processing effects.
@@ -92,11 +98,16 @@ type PlaybackResponse struct {
 // NewDefaultQuality provides sensible default audio quality settings.
 func NewDefaultQuality() Quality {
 	return Quality{
-		SampleRate: DEFAULT_SAMPLE_RATE,
-		BitDepth:   DEFAULT_BIT_DEPTH,
-		Channels:   DEFAULT_CHANNELS,
 		Codec:      "pcm_s16le",
+		Bitrate:    "",
+		SampleRate: DefaultSampleRate,
+		BitDepth:   DefaultBitDepth,
+		Channels:   DefaultChannels,
 		Volume:     1.0,
+		FadeIn:     0.0,
+		FadeOut:    0.0,
+		HighPass:   0,
+		LowPass:    0,
 		Normalize:  false,
 	}
 }
@@ -107,8 +118,8 @@ func (q *Quality) Validate() error {
 	if audioParamsErr != nil {
 		return audioParamsErr
 	}
-	effectParamsErr := q.validateEffectParams()
 
+	effectParamsErr := q.validateEffectParams()
 	if effectParamsErr != nil {
 		return effectParamsErr
 	}
@@ -117,44 +128,9 @@ func (q *Quality) Validate() error {
 }
 
 // ApplyEffects processes raw audio data according to the Quality settings.
-// This is the core technical function that was previously missing.
+// Currently returns the audio data unchanged as no effects are implemented.
 func (q *Quality) ApplyEffects(audioData []byte) ([]byte, error) {
-	// In a real implementation, this function would contain Digital Signal Processing
-	// (DSP) logic, likely by calling out to a library like FFMPEG or a native Go
-	// audio library.
-	processedData := audioData
-
-	if q.Normalize {
-		// TODO: Implement audio normalization logic (e.g., peak or LUFS).
-		// processedData = normalize(processedData)
-	}
-
-	if q.Volume != 1.0 {
-		// TODO: Implement volume adjustment logic.
-		// processedData = adjustVolume(processedData, q.Volume)
-	}
-
-	if q.HighPass > 0 {
-		// TODO: Implement high-pass filter.
-		// processedData = highPassFilter(processedData, q.HighPass, q.SampleRate)
-	}
-
-	if q.LowPass > 0 {
-		// TODO: Implement low-pass filter.
-		// processedData = lowPassFilter(processedData, q.LowPass, q.SampleRate)
-	}
-
-	if q.FadeIn > 0 {
-		// TODO: Implement fade-in effect over the specified duration in seconds.
-		// processedData = applyFadeIn(processedData, q.FadeIn, q.SampleRate)
-	}
-
-	if q.FadeOut > 0 {
-		// TODO: Implement fade-out effect.
-		// processedData = applyFadeOut(processedData, q.FadeOut, q.SampleRate)
-	}
-
-	return processedData, nil
+	return audioData, nil
 }
 
 // validateAudioParams checks core audio settings, now using unique error variables.
@@ -163,13 +139,13 @@ func (q *Quality) validateAudioParams() error {
 	if sampleRateErr != nil {
 		return sampleRateErr
 	}
-	bitDepthErr := validateBitDepth(q.BitDepth)
 
+	bitDepthErr := validateBitDepth(q.BitDepth)
 	if bitDepthErr != nil {
 		return bitDepthErr
 	}
-	channelsErr := validateChannels(q.Channels)
 
+	channelsErr := validateChannels(q.Channels)
 	if channelsErr != nil {
 		return channelsErr
 	}
@@ -178,28 +154,32 @@ func (q *Quality) validateAudioParams() error {
 }
 
 // validateEffectParams checks audio effect settings, now using unique error variables.
-func (q *Quality) validateEffectParams() error {
+func (q *Quality) validateVolumeAndFade() error {
 	volumeErr := validateVolume(q.Volume)
 	if volumeErr != nil {
 		return volumeErr
 	}
-	fadeInErr := validateFadeIn(q.FadeIn)
 
+	fadeInErr := validateFadeIn(q.FadeIn)
 	if fadeInErr != nil {
 		return fadeInErr
 	}
-	fadeOutErr := validateFadeOut(q.FadeOut)
 
+	fadeOutErr := validateFadeOut(q.FadeOut)
 	if fadeOutErr != nil {
 		return fadeOutErr
 	}
-	highPassErr := validateHighPass(q.HighPass)
 
+	return nil
+}
+
+func (q *Quality) validateFilterParams() error {
+	highPassErr := validateHighPass(q.HighPass)
 	if highPassErr != nil {
 		return highPassErr
 	}
-	lowPassErr := validateLowPass(q.LowPass)
 
+	lowPassErr := validateLowPass(q.LowPass)
 	if lowPassErr != nil {
 		return lowPassErr
 	}
@@ -207,16 +187,25 @@ func (q *Quality) validateEffectParams() error {
 	return nil
 }
 
+func (q *Quality) validateEffectParams() error {
+	volumeFadeErr := q.validateVolumeAndFade()
+	if volumeFadeErr != nil {
+		return volumeFadeErr
+	}
+
+	return q.validateFilterParams()
+}
+
 //
 // Validation Helpers
 //
 
 func validateSampleRate(sampleRate int) error {
-	if sampleRate <= 0 || sampleRate > MAX_SAMPLE_RATE {
+	if sampleRate <= 0 || sampleRate > MaxSampleRate {
 		return fmt.Errorf(
-			ERR_FMT_SAMPLE_RATE_RANGE,
+			ErrFmtSampleRateRange,
 			ErrInvalidQuality,
-			MAX_SAMPLE_RATE,
+			MaxSampleRate,
 		)
 	}
 
@@ -225,24 +214,24 @@ func validateSampleRate(sampleRate int) error {
 
 func validateBitDepth(bitDepth int) error {
 	switch bitDepth {
-	case BIT_DEPTH_8, BIT_DEPTH_16, BIT_DEPTH_24, BIT_DEPTH_32:
+	case BitDepth8, BitDepth16, BitDepth24, BitDepth32:
 		return nil
 	default:
-		return fmt.Errorf(ERR_FMT_BIT_DEPTH_VALUES, ErrInvalidQuality)
+		return fmt.Errorf(ErrFmtBitDepthValues, ErrInvalidQuality)
 	}
 }
 
 func validateChannels(channels int) error {
-	if channels <= 0 || channels > MAX_CHANNELS {
-		return fmt.Errorf(ERR_FMT_CHANNELS_RANGE, ErrInvalidQuality, MAX_CHANNELS)
+	if channels <= 0 || channels > MaxChannels {
+		return fmt.Errorf(ErrFmtChannelsRange, ErrInvalidQuality, MaxChannels)
 	}
 
 	return nil
 }
 
 func validateVolume(volume float64) error {
-	if volume < 0.0 || volume > MAX_VOLUME {
-		return fmt.Errorf(ERR_FMT_VOLUME_RANGE, ErrInvalidQuality, MAX_VOLUME)
+	if volume < 0.0 || volume > MaxVolume {
+		return fmt.Errorf(ErrFmtVolumeRange, ErrInvalidQuality, MaxVolume)
 	}
 
 	return nil
@@ -250,7 +239,7 @@ func validateVolume(volume float64) error {
 
 func validateFadeIn(fadeIn float64) error {
 	if fadeIn < 0.0 {
-		return fmt.Errorf(ERR_FMT_FADE_IN_NON_NEGATIVE, ErrInvalidQuality)
+		return fmt.Errorf(ErrFmtFadeInNonNegative, ErrInvalidQuality)
 	}
 
 	return nil
@@ -258,18 +247,18 @@ func validateFadeIn(fadeIn float64) error {
 
 func validateFadeOut(fadeOut float64) error {
 	if fadeOut < 0.0 {
-		return fmt.Errorf(ERR_FMT_FADE_OUT_NON_NEGATIVE, ErrInvalidQuality)
+		return fmt.Errorf(ErrFmtFadeOutNonNegative, ErrInvalidQuality)
 	}
 
 	return nil
 }
 
 func validateHighPass(highPass int) error {
-	if highPass < 0 || highPass > MAX_FILTER_FREQUENCY {
+	if highPass < 0 || highPass > MaxFilterFrequency {
 		return fmt.Errorf(
-			ERR_FMT_HIGH_PASS_RANGE,
+			ErrFmtHighPassRange,
 			ErrInvalidQuality,
-			MAX_FILTER_FREQUENCY,
+			MaxFilterFrequency,
 		)
 	}
 
@@ -277,11 +266,11 @@ func validateHighPass(highPass int) error {
 }
 
 func validateLowPass(lowPass int) error {
-	if lowPass < 0 || lowPass > MAX_FILTER_FREQUENCY {
+	if lowPass < 0 || lowPass > MaxFilterFrequency {
 		return fmt.Errorf(
-			ERR_FMT_LOW_PASS_RANGE,
+			ErrFmtLowPassRange,
 			ErrInvalidQuality,
-			MAX_FILTER_FREQUENCY,
+			MaxFilterFrequency,
 		)
 	}
 

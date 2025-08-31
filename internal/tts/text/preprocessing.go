@@ -14,32 +14,45 @@ import (
 	"unicode/utf8"
 )
 
-// Regex patterns for text preprocessing, following ALL_CAPS convention.
 const (
-	URL_REGEX_PATTERN        = `https?://[^\s]+`
-	EMAIL_REGEX_PATTERN      = `[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`
-	NUMBER_REGEX_PATTERN     = `\d+`
-	REFERENCE_REGEX_PATTERN  = `(?:\[\d+\]|\(\d+\)|[¹²³⁴⁵⁶⁷⁸⁹⁰]+|\b\d+\s*\.\s*$)`
-	CITATION_REGEX_PATTERN   = `\([^)]*\d{4}[^)]*\)|\b\w+\s+et\s+al\.`
-	WHITESPACE_REGEX_PATTERN = `\s+`
+	// NumberBaseTen represents the base for decimal number system.
+	NumberBaseTen = 10
+	// NumberBaseTwenty represents the boundary for teen numbers.
+	NumberBaseTwenty = 20
+	// NumberBaseHundred represents the base for hundreds.
+	NumberBaseHundred = 100
+	// NumberBaseThousand represents the base for thousands.
+	NumberBaseThousand = 1000
+	// MaxNumberForWords represents the maximum number that can be converted to words.
+	MaxNumberForWords = 999999
+)
+
+// Regex patterns for text preprocessing.
+const (
+	urlRegexPattern        = `https?://\S+`
+	emailRegexPattern      = `[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}`
+	numberRegexPattern     = `\d+`
+	referenceRegexPattern  = `(?:\[\d+\]|\(\d+\)|[¹²³⁴⁵⁶⁷⁸⁹⁰]+|\b\d+\s*\.\s*$)`
+	citationRegexPattern   = `\([^)]*\d{4}[^)]*\)|\b\w+\s+et\s+al\.`
+	whitespaceRegexPattern = `\s+`
 )
 
 // Placeholder patterns for preserving URLs and emails.
 const (
-	URL_PLACEHOLDER_PATTERN   = `__URL_PLACEHOLDER_%d__`
-	EMAIL_PLACEHOLDER_PATTERN = `__EMAIL_PLACEHOLDER_%d__`
+	urlPlaceholderPattern   = `__URL_PLACEHOLDER_%d__`
+	emailPlaceholderPattern = `__EMAIL_PLACEHOLDER_%d__`
 )
 
 // Punctuation and formatting constants.
 const (
-	EM_DASH       = "—"
-	EN_DASH       = "–"
-	FIGURE_DASH   = "‒"
-	ELLIPSIS      = "..."
-	ELLIPSIS_CHAR = "…"
-	CRLF          = "\r\n"
-	LF            = "\n"
-	TAB           = "\t"
+	emDash         = "—"
+	enDash         = "–"
+	figureDash     = "‒"
+	ellipsis       = "..."
+	ellipsisChar   = "…"
+	carriageReturn = "\r\n"
+	lineFeed       = "\n"
+	tabChar        = "\t"
 )
 
 // Preprocessor provides text preprocessing functionality for TTS.
@@ -71,12 +84,12 @@ func NewPreprocessor() *Preprocessor {
 	}
 
 	return &Preprocessor{
-		urlPattern:           regexp.MustCompile(URL_REGEX_PATTERN),
-		emailPattern:         regexp.MustCompile(EMAIL_REGEX_PATTERN),
-		numberPattern:        regexp.MustCompile(NUMBER_REGEX_PATTERN),
-		referencePattern:     regexp.MustCompile(REFERENCE_REGEX_PATTERN),
-		citationPattern:      regexp.MustCompile(CITATION_REGEX_PATTERN),
-		whitespacePattern:    regexp.MustCompile(WHITESPACE_REGEX_PATTERN),
+		urlPattern:           regexp.MustCompile(urlRegexPattern),
+		emailPattern:         regexp.MustCompile(emailRegexPattern),
+		numberPattern:        regexp.MustCompile(numberRegexPattern),
+		referencePattern:     regexp.MustCompile(referenceRegexPattern),
+		citationPattern:      regexp.MustCompile(citationRegexPattern),
+		whitespacePattern:    regexp.MustCompile(whitespaceRegexPattern),
 		abbreviationReplacer: strings.NewReplacer(abbreviations...),
 	}
 }
@@ -90,6 +103,7 @@ func (p *Preprocessor) PreprocessText(text string) string {
 
 	// Step 1: Normalize standard forms (abbreviations, numbers).
 	normalizedText := p.expandAbbreviations(text)
+
 	normalizedText = p.normalizeNumbers(normalizedText)
 
 	// Step 2: Preserve tokens that should not be cleaned (URLs, emails).
@@ -98,6 +112,7 @@ func (p *Preprocessor) PreprocessText(text string) string {
 
 	// Step 3: Remove unwanted content like citations and references.
 	cleanedText := p.removeReferences(preservedText)
+
 	cleanedText = p.removeCitations(cleanedText)
 
 	// Step 4: Normalize whitespace and formatting.
@@ -114,10 +129,33 @@ func (p *Preprocessor) PreprocessText(text string) string {
 
 // ConvertToPhonemes transforms cleaned text into a phonetic representation.
 // This is a critical step for the acoustic model in a TTS pipeline.
-// This implementation uses a simple dictionary lookup as a robust, explicit starting point.
+// This implementation uses a simple dictionary lookup as a robust, explicit starting
+// point.
 func (p *Preprocessor) ConvertToPhonemes(text string) string {
-	// A simple dictionary for Grapheme-to-Phoneme (G2P) conversion.
-	phonemeDict := map[string]string{
+	phonemeDict := p.getPhonemeDict()
+
+	var result strings.Builder
+
+	words := strings.Fields(strings.ToLower(text))
+
+	for i, word := range words {
+		phoneme := p.convertWordToPhoneme(word, phonemeDict)
+		result.WriteString(phoneme)
+
+		if i < len(words)-1 {
+			result.WriteString(" ")
+		}
+	}
+
+	return result.String()
+}
+
+// ConvertToPhonemes transforms cleaned text into a phonetic representation.
+// This is a critical step for the acoustic model in a TTS pipeline.
+// This implementation uses a simple dictionary lookup as a robust, explicit starting
+// point.
+func (p *Preprocessor) getPhonemeDict() map[string]string {
+	return map[string]string{
 		"hello":    "h ɛ l oʊ",
 		"world":    "w ɜ r l d",
 		"go":       "g oʊ",
@@ -137,28 +175,18 @@ func (p *Preprocessor) ConvertToPhonemes(text string) string {
 		"speech":   "s p i tʃ",
 		"system":   "s ɪ s t ə m",
 	}
+}
 
-	var result strings.Builder
-	words := strings.Fields(strings.ToLower(text))
-
-	for i, word := range words {
-		// Clean the word of any surrounding punctuation for dictionary lookup.
-		cleanWord := strings.Trim(word, `.,!?;:"'`)
-
-		if phonemes, found := phonemeDict[cleanWord]; found {
-			result.WriteString(phonemes)
-		} else {
-			// Fallback for out-of-dictionary words is the word itself.
-			// A more advanced system might attempt to guess the phonemes.
-			result.WriteString(cleanWord)
-		}
-
-		if i < len(words)-1 {
-			result.WriteString(" ")
-		}
+func (p *Preprocessor) convertWordToPhoneme(
+	word string,
+	phonemeDict map[string]string,
+) string {
+	cleanWord := strings.Trim(word, `.,!?;:"'`)
+	if phonemes, found := phonemeDict[cleanWord]; found {
+		return phonemes
 	}
 
-	return result.String()
+	return cleanWord
 }
 
 // expandAbbreviations converts common abbreviations to their full form.
@@ -173,6 +201,7 @@ func (p *Preprocessor) normalizeNumbers(text string) string {
 		if err != nil {
 			return s // Return original string if not a valid integer
 		}
+
 		return integerToWords(num)
 	})
 }
@@ -180,23 +209,33 @@ func (p *Preprocessor) normalizeNumbers(text string) string {
 // preserveTokens temporarily replaces URLs and emails with placeholders.
 // This function is crucial for preventing the cleaning process from corrupting them.
 // It now correctly handles multiple identical tokens.
-func (p *Preprocessor) preserveTokens(text string) (string, map[string]string) {
-	placeholders := make(map[string]string)
-	i := 0
+func (p *Preprocessor) preserveTokens(
+	text string,
+) (processedText string, placeholders map[string]string) {
+	placeholders = make(map[string]string)
+
+	counter := 0
 
 	replaceFunc := func(pattern *regexp.Regexp, placeholderFormat string) {
-		text = pattern.ReplaceAllStringFunc(text, func(match string) string {
-			placeholder := fmt.Sprintf(placeholderFormat, i)
-			placeholders[placeholder] = match
-			i++
-			return placeholder
-		})
+		processedText = pattern.ReplaceAllStringFunc(
+			processedText,
+			func(match string) string {
+				placeholder := fmt.Sprintf(placeholderFormat, counter)
+
+				placeholders[placeholder] = match
+				counter++
+
+				return placeholder
+			},
+		)
 	}
 
-	replaceFunc(p.urlPattern, URL_PLACEHOLDER_PATTERN)
-	replaceFunc(p.emailPattern, EMAIL_PLACEHOLDER_PATTERN)
+	processedText = text
 
-	return text, placeholders
+	replaceFunc(p.urlPattern, urlPlaceholderPattern)
+	replaceFunc(p.emailPattern, emailPlaceholderPattern)
+
+	return processedText, placeholders
 }
 
 // restoreTokens restores URLs and emails from placeholders.
@@ -204,6 +243,7 @@ func (p *Preprocessor) restoreTokens(text string, placeholders map[string]string
 	for placeholder, original := range placeholders {
 		text = strings.ReplaceAll(text, placeholder, original)
 	}
+
 	return text
 }
 
@@ -223,7 +263,8 @@ func (p *Preprocessor) normalizeWhitespace(text string) string {
 	text = p.whitespacePattern.ReplaceAllString(text, " ")
 
 	// Clean up common formatting issues.
-	replacer := strings.NewReplacer(CRLF, " ", LF, " ", TAB, " ")
+	replacer := strings.NewReplacer(carriageReturn, " ", lineFeed, " ", tabChar, " ")
+
 	text = replacer.Replace(text)
 
 	return strings.TrimSpace(text)
@@ -257,6 +298,7 @@ func (p *Preprocessor) removeExcessivePunctuation(text string) string {
 		} else if !isPunct {
 			result = append(result, char)
 		}
+
 		lastWasPunct = isPunct
 	}
 
@@ -267,13 +309,14 @@ func (p *Preprocessor) removeExcessivePunctuation(text string) string {
 func (p *Preprocessor) normalizeQuotesAndDashes(text string) string {
 	// Using a single, efficient replacer is preferred.
 	replacer := strings.NewReplacer(
-		EM_DASH, "-",
-		EN_DASH, "-",
-		FIGURE_DASH, "-",
-		ELLIPSIS_CHAR, ELLIPSIS,
+		emDash, "-",
+		enDash, "-",
+		figureDash, "-",
+		ellipsisChar, ellipsis,
 		"“", `"`, "”", `"`, // Smart quotes to standard quotes
 		"‘", "'", "’", "'", // Smart single quotes to standard
 	)
+
 	return replacer.Replace(text)
 }
 
@@ -300,67 +343,106 @@ func (p *Preprocessor) ensureProperSentenceEndings(text string) string {
 
 // integerToWords converts an integer into its English word representation.
 // This is a simplified implementation for demonstration.
-func integerToWords(n int) string {
-	if n < 0 || n > 999999 {
-		return strconv.Itoa(n) // Fallback for out-of-range numbers.
+type numberConverter struct {
+	ones  []string
+	teens []string
+	tens  []string
+}
+
+func newNumberConverter() *numberConverter {
+	return &numberConverter{
+		ones: []string{
+			"", "one", "two", "three", "four", "five",
+			"six", "seven", "eight", "nine",
+		},
+		teens: []string{
+			"ten", "eleven", "twelve", "thirteen", "fourteen",
+			"fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+		},
+		tens: []string{
+			"", "", "twenty", "thirty", "forty", "fifty",
+			"sixty", "seventy", "eighty", "ninety",
+		},
 	}
-	if n == 0 {
+}
+
+func (nc *numberConverter) convertUnderTen(num int) string {
+	return nc.ones[num]
+}
+
+func (nc *numberConverter) convertTeens(num int) string {
+	return nc.teens[num-NumberBaseTen]
+}
+
+func (nc *numberConverter) convertTens(num int) string {
+	result := nc.tens[num/NumberBaseTen]
+	if num%NumberBaseTen > 0 {
+		result += " " + nc.ones[num%NumberBaseTen]
+	}
+
+	return result
+}
+
+func (nc *numberConverter) convertHundreds(num int) string {
+	result := nc.ones[num/NumberBaseHundred] + " hundred"
+
+	remainder := num % NumberBaseHundred
+	if remainder > 0 {
+		result += " " + nc.convertUnderHundred(remainder)
+	}
+
+	return result
+}
+
+func (nc *numberConverter) convertUnderHundred(num int) string {
+	if num < NumberBaseTen {
+		return nc.convertUnderTen(num)
+	}
+
+	if num < NumberBaseTwenty {
+		return nc.convertTeens(num)
+	}
+
+	return nc.convertTens(num)
+}
+
+func (nc *numberConverter) processThousands(number int, parts *[]string) int {
+	thousands := number / NumberBaseThousand
+	if thousands > 0 {
+		*parts = append(*parts, nc.convertHundreds(thousands)+" thousand")
+	}
+
+	return number % NumberBaseThousand
+}
+
+func (nc *numberConverter) processHundreds(number int, parts *[]string) int {
+	hundreds := number / NumberBaseHundred
+	if hundreds > 0 {
+		*parts = append(*parts, nc.convertUnderTen(hundreds)+" hundred")
+	}
+
+	return number % NumberBaseHundred
+}
+
+func integerToWords(number int) string {
+	if number < 0 || number > MaxNumberForWords {
+		return strconv.Itoa(number)
+	}
+
+	if number == 0 {
 		return "zero"
 	}
 
-	// Helper arrays for number conversion.
-	ones := []string{"", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"}
-	teens := []string{
-		"ten",
-		"eleven",
-		"twelve",
-		"thirteen",
-		"fourteen",
-		"fifteen",
-		"sixteen",
-		"seventeen",
-		"eighteen",
-		"nineteen",
-	}
-	tens := []string{
-		"",
-		"",
-		"twenty",
-		"thirty",
-		"forty",
-		"fifty",
-		"sixty",
-		"seventy",
-		"eighty",
-		"ninety",
-	}
+	numberConverter := newNumberConverter()
 
 	var parts []string
-	processPart := func(num int, suffix string) int {
-		if num > 0 {
-			parts = append(parts, toWords(num)+" "+suffix)
-		}
-		return 0 // Dummy return to fit in a structure if needed later
-	}
 
-	processPart(n/1000, "thousand")
-	n %= 1000
-	processPart(n/100, "hundred")
-	n %= 100
+	remaining := numberConverter.processThousands(number, &parts)
 
-	if n > 0 {
-		var tempPart string
-		if n < 10 {
-			tempPart = ones[n]
-		} else if n < 20 {
-			tempPart = teens[n-10]
-		} else {
-			tempPart = tens[n/10]
-			if n%10 > 0 {
-				tempPart += " " + ones[n%10]
-			}
-		}
-		parts = append(parts, tempPart)
+	remaining = numberConverter.processHundreds(remaining, &parts)
+
+	if remaining > 0 {
+		parts = append(parts, numberConverter.convertUnderHundred(remaining))
 	}
 
 	return strings.Join(parts, " ")

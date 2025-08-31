@@ -1,3 +1,6 @@
+// Package main provides the TTS client command-line interface for text-to-speech
+// conversion.
+// This client supports both single text processing and batch processing from JSON files.
 package main
 
 import (
@@ -13,6 +16,13 @@ import (
 
 	"tts/internal/config"
 	"tts/internal/tts"
+)
+
+const (
+	// HealthCheckTimeout defines the timeout for health check operations.
+	HealthCheckTimeout = 10 * time.Second
+	// ClientTimeout defines the timeout for HTTP client operations.
+	ClientTimeout = 10 * time.Second
 )
 
 // Flag descriptions and messages.
@@ -35,18 +45,25 @@ const (
 	flagHealth  = "health"
 )
 
+// Static errors.
+var (
+	ErrFailedToLoadConfig = errors.New("failed to load configuration")
+	ErrFailedToInitLogger = errors.New("failed to initialize logger")
+	ErrFailedToCreateDirs = errors.New("failed to create directories")
+	ErrHealthCheckFailed  = errors.New("health check failed")
+	ErrEitherTextOrChunks = errors.New(
+		"either --text or --chunks must be provided",
+	)
+	ErrCannotSpecifyBoth     = errors.New("cannot specify both --text and --chunks")
+	ErrFailedToProcessText   = errors.New("failed to process text")
+	ErrFailedToProcessChunks = errors.New("failed to process chunks")
+)
+
 // Error and log messages.
 const (
-	errFailedToLoadConfig    = "Failed to load configuration: %v"
-	errFailedToInitLogger    = "Failed to initialize logger: %v"
-	errFailedToCreateDirs    = "Failed to create directories: %v"
-	errHealthCheckFailed     = "Health check failed: %v"
-	errServiceNotHealthy     = "TTS service is not healthy: %v\n"
-	errServiceHealthy        = "TTS service is healthy"
-	errEitherTextOrChunks    = "Either --text or --chunks must be provided"
-	errCannotSpecifyBoth     = "Cannot specify both --text and --chunks"
-	errFailedToProcessText   = "Failed to process text: %v"
-	errFailedToProcessChunks = "Failed to process chunks: %v"
+	errHealthCheckFailed = "Health check failed: %v"
+	errServiceNotHealthy = "TTS service is not healthy: %v\n"
+	errServiceHealthy    = "TTS service is healthy"
 )
 
 // Log messages.
@@ -90,22 +107,25 @@ func main() {
 func run() error {
 	flags := parseFlags()
 
-	cfg, logger, projectRoot, err := setup(flags.config, flags.verbose)
+	cfg, lgr, projectRoot, err := setup(flags.config, flags.verbose)
 	if err != nil {
 		return err
 	}
-	defer logger.Close()
 
-	engine := tts.NewHTTPEngine(cfg, logger)
-	defer engine.Close()
+	defer func() {
+		closeErr := lgr.Close()
+		if closeErr != nil {
+			log.Printf("failed to close logger: %v", closeErr)
+		}
+	}()
 
-	logger.Info(logClientInitialized, projectRoot)
+	lgr.Info(logClientInitialized, projectRoot)
 
 	if flags.health {
-		return handleHealthCheck(cfg, logger)
+		return handleHealthCheck(cfg, lgr)
 	}
 
-	return handleExecution(engine, cfg, logger, flags)
+	return handleExecution(cfg, lgr, flags)
 }
 
 // parseFlags defines and parses command-line flags, returning them in a struct.
@@ -127,6 +147,25 @@ func setup(
 	configPath string,
 	verbose bool,
 ) (*config.Config, *logger.Logger, string, error) {
+	cfg, projectRoot, err := loadConfig(configPath)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	lgr, err := initLogger(cfg, verbose)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
+	if err := ensureDirectories(cfg, lgr); err != nil {
+		return nil, nil, "", err
+	}
+
+	return cfg, lgr, projectRoot, nil
+}
+
+// loadConfig loads configuration from the specified path or current directory.
+func loadConfig(configPath string) (*config.Config, string, error) {
 	startDir := "."
 	if configPath != "" {
 		startDir = filepath.Dir(configPath)
@@ -134,73 +173,146 @@ func setup(
 
 	cfg, projectRoot, err := config.Load(startDir)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf(errFailedToLoadConfig, err)
+		return nil, "", fmt.Errorf("%w: %w", ErrFailedToLoadConfig, err)
 	}
 
+	return cfg, projectRoot, nil
+}
+
+// initLogger creates a logger with the appropriate filename based on verbosity.
+func initLogger(cfg *config.Config, verbose bool) (*logger.Logger, error) {
 	logFileName := logFileNameDefault
 	if verbose {
 		logFileName = logFileNameVerbose
 	}
 
-	logger, err := logger.New(cfg.Logging.LogDir, logFileName)
+	lgr, err := logger.New(cfg.Logging.LogDir, logFileName)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf(errFailedToInitLogger, err)
+		return nil, fmt.Errorf("%w: %w", ErrFailedToInitLogger, err)
 	}
 
-	if err := cfg.EnsureDirectories(); err != nil {
-		logger.Error(errFailedToCreateDirs, err)
+	return lgr, nil
+}
 
-		return nil, nil, "", fmt.Errorf(errFailedToCreateDirs, err)
+// ensureDirectories creates necessary directories and handles errors.
+func ensureDirectories(cfg *config.Config, lgr *logger.Logger) error {
+	err := cfg.EnsureDirectories()
+	if err != nil {
+		lgr.Error("%v: %v", ErrFailedToCreateDirs, err)
+
+		return fmt.Errorf("%w: %w", ErrFailedToCreateDirs, err)
 	}
 
-	return cfg, logger, projectRoot, nil
+	return nil
 }
 
 // handleHealthCheck performs a service health check and prints the result.
-func handleHealthCheck(cfg *config.Config, logger *logger.Logger) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func handleHealthCheck(cfg *config.Config, lgr *logger.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), HealthCheckTimeout)
 	defer cancel()
 
-	client := tts.NewHTTPClient(cfg.TTS.GetServiceURL(), 10*time.Second)
+	client := tts.NewHTTPClient(cfg.TTS.GetServiceURL(), ClientTimeout)
+
 	err := client.HealthCheck(ctx)
 	if err != nil {
-		logger.Error(errHealthCheckFailed, err)
-		fmt.Printf(errServiceNotHealthy, err)
+		lgr.Error(errHealthCheckFailed, err)
+		lgr.Error(errServiceNotHealthy, err)
 
 		return err
 	}
 
-	fmt.Println(errServiceHealthy)
+	lgr.Info(errServiceHealthy)
 
 	return nil
 }
 
 // handleExecution validates flags and dispatches to the correct processing function.
 func handleExecution(
-	engine *tts.HTTPEngine,
 	cfg *config.Config,
-	logger *logger.Logger,
+	lgr *logger.Logger,
 	flags appFlags,
 ) error {
+	err := validateFlags(flags, lgr)
+	if err != nil {
+		return err
+	}
+
+	engine := tts.NewHTTPEngine(cfg, lgr)
+
+	defer func() {
+		closeErr := engine.Close()
+		if closeErr != nil {
+			lgr.Error("failed to close tts engine: %v", closeErr)
+		}
+	}()
+
+	return executeProcessing(engine, cfg, lgr, flags)
+}
+
+// validateFlags checks for required and conflicting flags.
+func validateFlags(flags appFlags, lgr *logger.Logger) error {
+	err := checkRequiredFlags(flags)
+	if err != nil {
+		logError(lgr, ErrEitherTextOrChunks.Error())
+
+		return err
+	}
+
+	err = checkConflictingFlags(flags)
+	if err != nil {
+		logError(lgr, ErrCannotSpecifyBoth.Error())
+
+		return err
+	}
+
+	return nil
+}
+
+// checkRequiredFlags ensures at least one required flag is provided.
+func checkRequiredFlags(flags appFlags) error {
 	if flags.text == "" && flags.chunks == "" {
 		flag.Usage()
-		logger.Error(errEitherTextOrChunks)
 
-		return errors.New(errEitherTextOrChunks)
+		return ErrEitherTextOrChunks
 	}
 
+	return nil
+}
+
+// checkConflictingFlags ensures conflicting flags are not both provided.
+func checkConflictingFlags(flags appFlags) error {
 	if flags.text != "" && flags.chunks != "" {
-		logger.Error(errCannotSpecifyBoth)
-
-		return errors.New(errCannotSpecifyBoth)
+		return ErrCannotSpecifyBoth
 	}
 
+	return nil
+}
+
+// logError logs an error message if logger is available.
+func logError(lgr *logger.Logger, message string) {
+	if lgr != nil {
+		lgr.Error(message)
+	}
+}
+
+// validateArgumentsOnly validates flags without requiring logger or other dependencies.
+func validateArgumentsOnly(flags appFlags) error {
+	return validateFlags(flags, nil)
+}
+
+// executeProcessing dispatches to the appropriate processing function.
+func executeProcessing(
+	engine *tts.HTTPEngine,
+	cfg *config.Config,
+	lgr *logger.Logger,
+	flags appFlags,
+) error {
 	if flags.text != "" {
-		return processSingleText(engine, cfg, logger, flags.text, flags.output)
+		return processSingleText(engine, cfg, lgr, flags.text, flags.output)
 	}
 
 	if flags.chunks != "" {
-		return processChunks(engine, cfg, logger, flags.chunks, flags.output)
+		return processChunks(engine, cfg, lgr, flags.chunks, flags.output)
 	}
 
 	return nil
@@ -210,7 +322,7 @@ func handleExecution(
 func processSingleText(
 	engine *tts.HTTPEngine,
 	cfg *config.Config,
-	logger *logger.Logger,
+	lgr *logger.Logger,
 	text, outputFlag string,
 ) error {
 	outputPath := outputFlag
@@ -218,17 +330,17 @@ func processSingleText(
 		outputPath = filepath.Join(cfg.Paths.OutputDir, defaultOutputFile)
 	}
 
-	logger.Info(logProcessingSingleText, outputPath)
+	lgr.Info(logProcessingSingleText, outputPath)
 
 	err := engine.ProcessSingleChunk(text, outputPath)
 	if err != nil {
-		logger.Error(errFailedToProcessText, err)
+		lgr.Error("%v: %v", ErrFailedToProcessText, err)
 
-		return fmt.Errorf(errFailedToProcessText, err)
+		return fmt.Errorf("%w: %w", ErrFailedToProcessText, err)
 	}
 
-	logger.Info(logSuccessfullyGenerated, outputPath)
-	fmt.Printf(logGenerated, outputPath)
+	lgr.Info(logSuccessfullyGenerated, outputPath)
+	lgr.Info(logGenerated, outputPath)
 
 	return nil
 }
@@ -237,7 +349,7 @@ func processSingleText(
 func processChunks(
 	engine *tts.HTTPEngine,
 	cfg *config.Config,
-	logger *logger.Logger,
+	lgr *logger.Logger,
 	chunksPath, outputFlag string,
 ) error {
 	outputDir := outputFlag
@@ -245,18 +357,18 @@ func processChunks(
 		outputDir = cfg.Paths.OutputDir
 	}
 
-	logger.Info(logProcessingChunks, chunksPath)
-	logger.Info(logOutputDirectory, outputDir)
+	lgr.Info(logProcessingChunks, chunksPath)
+	lgr.Info(logOutputDirectory, outputDir)
 
 	err := engine.ProcessChunks(chunksPath, outputDir)
 	if err != nil {
-		logger.Error(errFailedToProcessChunks, err)
+		lgr.Error("%v: %v", ErrFailedToProcessChunks, err)
 
-		return fmt.Errorf(errFailedToProcessChunks, err)
+		return fmt.Errorf("%w: %w", ErrFailedToProcessChunks, err)
 	}
 
-	logger.Info(logSuccessfullyProcessed)
-	fmt.Printf(logGeneratedAudioFiles, outputDir)
+	lgr.Info(logSuccessfullyProcessed)
+	lgr.Info(logGeneratedAudioFiles, outputDir)
 
 	return nil
 }

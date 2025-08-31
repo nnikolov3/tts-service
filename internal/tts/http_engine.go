@@ -17,8 +17,26 @@ import (
 )
 
 const (
-	// Error messages, log formats, and file patterns.
-	errChunksPathEmpty          = "chunks path cannot be empty"
+	// HealthCheckTimeout defines the timeout for health check operations.
+	HealthCheckTimeout = 10 * time.Second
+)
+
+// Static errors.
+var (
+	ErrChunksPathEmpty = errors.New("chunks path cannot be empty")
+	ErrOutputDirEmpty  = errors.New("output directory cannot be empty")
+	ErrTextEmpty       = errors.New("text cannot be empty")
+	ErrOutputPathEmpty = errors.New("output path cannot be empty")
+	ErrNoChunksFound   = errors.New("no chunks found")
+)
+
+// Helper functions for dynamic error messages.
+func newNoChunksFoundError(path string) error {
+	return fmt.Errorf("%w in %s", ErrNoChunksFound, path)
+}
+
+const (
+	// Log formats and file patterns.
 	errFmtHealthCheckFailed     = "TTS service health check failed: %w"
 	logFmtServiceHealthy        = "TTS service is healthy, processing %d chunks"
 	logFmtGeneratedAudio        = "Generated audio: %s (%d bytes)"
@@ -41,7 +59,7 @@ type HTTPEngine struct {
 // NewHTTPEngine creates an HTTP-based TTS engine with the provided configuration.
 // The engine will communicate with the TTS service at the configured URL and
 // use the specified timeout for all HTTP operations.
-func NewHTTPEngine(cfg *config.Config, logger *logger.Logger) *HTTPEngine {
+func NewHTTPEngine(cfg *config.Config, log *logger.Logger) *HTTPEngine {
 	serviceURL := cfg.TTS.GetServiceURL()
 	timeout := time.Duration(cfg.TTS.TimeoutSeconds) * time.Second
 
@@ -50,7 +68,7 @@ func NewHTTPEngine(cfg *config.Config, logger *logger.Logger) *HTTPEngine {
 	return &HTTPEngine{
 		client: client,
 		config: cfg,
-		logger: logger,
+		logger: log,
 	}
 }
 
@@ -59,13 +77,13 @@ func NewHTTPEngine(cfg *config.Config, logger *logger.Logger) *HTTPEngine {
 // mock clients while maintaining the same engine behavior.
 func NewHTTPEngineWithClient(
 	cfg *config.Config,
-	logger *logger.Logger,
+	log *logger.Logger,
 	client *HTTPClient,
 ) *HTTPEngine {
 	return &HTTPEngine{
 		client: client,
 		config: cfg,
-		logger: logger,
+		logger: log,
 	}
 }
 
@@ -76,37 +94,23 @@ func NewHTTPEngineWithClient(
 // The method performs a health check before processing to fail fast if the service
 // is unavailable, adhering to the "Make the common case fast" principle.
 func (e *HTTPEngine) ProcessChunks(chunksPath, outputDir string) error {
-	// Validate inputs at the boundary
-	if chunksPath == "" {
-		return errors.New(errChunksPathEmpty)
+	inputErr := e.validateChunkInputs(chunksPath, outputDir)
+	if inputErr != nil {
+		return inputErr
 	}
 
-	if outputDir == "" {
-		return errors.New("output directory cannot be empty")
+	chunks, prepErr := e.prepareChunkProcessing(chunksPath, outputDir)
+	if prepErr != nil {
+		return prepErr
 	}
 
-	// Read chunks file
-	chunks, err := e.readChunksFile(chunksPath)
-	if err != nil {
-		return fmt.Errorf("failed to read chunks: %w", err)
-	}
-
-	// Ensure output directory exists
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
-	}
-
-	// Check service health first
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := e.client.HealthCheck(ctx); err != nil {
-		return fmt.Errorf(errFmtHealthCheckFailed, err)
+	healthErr := e.checkServiceHealth()
+	if healthErr != nil {
+		return healthErr
 	}
 
 	e.logger.Info(logFmtServiceHealthy, len(chunks))
 
-	// Process chunks in parallel
 	return e.processChunksParallel(chunks, outputDir)
 }
 
@@ -117,46 +121,119 @@ func (e *HTTPEngine) ProcessChunks(chunksPath, outputDir string) error {
 // This method is suitable for processing individual text inputs or as part
 // of a larger batch processing workflow.
 func (e *HTTPEngine) ProcessSingleChunk(text, outputPath string) error {
-	// Validate inputs at the boundary
-	if text == "" {
-		return errors.New("text cannot be empty")
+	inputErr := e.validateSingleChunkInputs(text, outputPath)
+	if inputErr != nil {
+		return inputErr
 	}
 
-	if outputPath == "" {
-		return errors.New("output path cannot be empty")
+	prepErr := e.prepareSingleChunkOutput(outputPath)
+	if prepErr != nil {
+		return prepErr
 	}
 
-	// Ensure output directory exists
-	outputDir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create output directory: %w", err)
+	audioData, genErr := e.generateSpeechAudio(text)
+	if genErr != nil {
+		return genErr
 	}
 
-	// Construct TTS request using configuration defaults
-	req := TTSRequest{
-		Text:        text,
-		Temperature: e.config.TTS.Temperature,
-		Language:    "en",
-	}
-
-	// Generate speech with configured timeout
-	ctx, cancel := context.WithTimeout(context.Background(),
-		time.Duration(e.config.TTS.TimeoutSeconds)*time.Second)
-	defer cancel()
-
-	audioData, err := e.client.GenerateSpeech(ctx, req)
-	if err != nil {
-		return fmt.Errorf("failed to generate speech: %w", err)
-	}
-
-	// Write audio data to output file with appropriate permissions
-	if err := os.WriteFile(outputPath, audioData, 0o644); err != nil {
-		return fmt.Errorf("failed to write audio file: %w", err)
+	writeErr := os.WriteFile(outputPath, audioData, 0o600)
+	if writeErr != nil {
+		return fmt.Errorf("failed to write audio file: %w", writeErr)
 	}
 
 	e.logger.Info(logFmtGeneratedAudio, outputPath, len(audioData))
 
 	return nil
+}
+
+// Close performs cleanup operations for the HTTP engine.
+// Currently a no-op as HTTP clients don't require explicit cleanup,
+// but provides interface consistency for future resource management needs.
+func (e *HTTPEngine) Close() error {
+	return nil
+}
+
+func (e *HTTPEngine) validateChunkInputs(chunksPath, outputDir string) error {
+	if chunksPath == "" {
+		return ErrChunksPathEmpty
+	}
+
+	if outputDir == "" {
+		return ErrOutputDirEmpty
+	}
+
+	return nil
+}
+
+func (e *HTTPEngine) prepareChunkProcessing(
+	chunksPath, outputDir string,
+) ([]string, error) {
+	chunks, chunksErr := e.readChunksFile(chunksPath)
+	if chunksErr != nil {
+		return nil, fmt.Errorf("failed to read chunks: %w", chunksErr)
+	}
+
+	dirErr := os.MkdirAll(outputDir, 0o750)
+	if dirErr != nil {
+		return nil, fmt.Errorf("failed to create output directory: %w", dirErr)
+	}
+
+	return chunks, nil
+}
+
+func (e *HTTPEngine) checkServiceHealth() error {
+	ctx, cancel := context.WithTimeout(context.Background(), HealthCheckTimeout)
+	defer cancel()
+
+	healthErr := e.client.HealthCheck(ctx)
+	if healthErr != nil {
+		return fmt.Errorf(errFmtHealthCheckFailed, healthErr)
+	}
+
+	return nil
+}
+
+func (e *HTTPEngine) validateSingleChunkInputs(text, outputPath string) error {
+	if text == "" {
+		return ErrTextEmpty
+	}
+
+	if outputPath == "" {
+		return ErrOutputPathEmpty
+	}
+
+	return nil
+}
+
+func (e *HTTPEngine) prepareSingleChunkOutput(outputPath string) error {
+	outputDir := filepath.Dir(outputPath)
+
+	dirErr := os.MkdirAll(outputDir, 0o750)
+	if dirErr != nil {
+		return fmt.Errorf("failed to create output directory: %w", dirErr)
+	}
+
+	return nil
+}
+
+func (e *HTTPEngine) generateSpeechAudio(text string) ([]byte, error) {
+	req := Request{
+		Text:           text,
+		SpeakerRefPath: "",
+		Temperature:    e.config.TTS.Temperature,
+		Language:       "en",
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(),
+		time.Duration(e.config.TTS.TimeoutSeconds)*time.Second)
+	defer cancel()
+
+	audioData, speechErr := e.client.GenerateSpeech(ctx, req)
+	if speechErr != nil {
+		return nil, fmt.Errorf("failed to generate speech: %w", speechErr)
+	}
+
+	return audioData, nil
 }
 
 // readChunksFile reads and parses a JSON file containing an array of text chunks.
@@ -175,7 +252,7 @@ func (e *HTTPEngine) readChunksFile(chunksPath string) ([]string, error) {
 	}
 
 	if len(chunks) == 0 {
-		return nil, fmt.Errorf("no chunks found in %s", chunksPath)
+		return nil, newNoChunksFoundError(chunksPath)
 	}
 
 	return chunks, nil
@@ -244,11 +321,4 @@ func (e *HTTPEngine) processChunksParallel(chunks []string, outputDir string) er
 	close(workerPool)
 
 	return lastError
-}
-
-// Close performs cleanup operations for the HTTP engine.
-// Currently a no-op as HTTP clients don't require explicit cleanup,
-// but provides interface consistency for future resource management needs.
-func (e *HTTPEngine) Close() error {
-	return nil
 }

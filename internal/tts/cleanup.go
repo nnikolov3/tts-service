@@ -6,6 +6,7 @@
 package tts
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,9 +39,13 @@ const (
 	listItemFormat = "  - %s\n"
 )
 
+// Static errors.
+var (
+	ErrMissingGoImpl = errors.New("missing Go implementations")
+)
+
 // Error messages.
 const (
-	errMissingGoImpl     = "missing Go implementations: %s"
 	replacementFormat    = "%s -> %s"
 	replacementSeparator = ", "
 )
@@ -57,20 +62,18 @@ type CleanupReport struct {
 
 // AnalyzeOuteTTSCleanup analyzes what can be cleaned up from OuteTTS Python
 // implementation.
-func AnalyzeOuteTTSCleanup(outettsDir string) (*CleanupReport, error) {
-	report := &CleanupReport{}
-
-	// Define what can be removed (replaced by Go implementations)
-	removableFiles := []string{
+func getRemovableFiles() []string {
+	return []string{
 		"utils/chunking.py",      // Replaced by internal/chunking/chunking.go
 		"utils/preprocessing.py", // Can be implemented in Go
 		"utils/helpers.py",       // Simple utilities, can be Go
 		"anyascii/__init__.py",   // Can be pure Go implementation
 		"whisper/transcribe.py",  // Can use Go HTTP client for API calls
 	}
+}
 
-	// Define what must be kept (core ML functionality)
-	essentialFiles := []string{
+func getEssentialFiles() []string {
+	return []string{
 		"interface.py",              // Main OuteTTS interface
 		"version/interface.py",      // Core model interfaces
 		"version/playback.py",       // Audio playback
@@ -82,14 +85,13 @@ func AnalyzeOuteTTSCleanup(outettsDir string) (*CleanupReport, error) {
 		"models/vllm_model.py",      // VLLM model loading
 		"models/llamacpp_server.py", // Llama.cpp server integration
 	}
+}
 
-	// Define removable directories
-	removableDirs := []string{
+func getDirectoryLists() (removableDirs, essentialDirs []string) {
+	removableDirs = []string{
 		"anyascii/_data", // ASCII conversion data (can be Go)
 	}
-
-	// Define essential directories
-	essentialDirs := []string{
+	essentialDirs = []string{
 		"version/v1",    // Version 1 interface
 		"version/v2",    // Version 2 interface
 		"version/v3",    // Version 3 interface
@@ -98,38 +100,68 @@ func AnalyzeOuteTTSCleanup(outettsDir string) (*CleanupReport, error) {
 		"wav_tokenizer", // Audio tokenization
 	}
 
-	// Analyze files
+	return removableDirs, essentialDirs
+}
+
+func analyzeRemovableFiles(outettsDir string, report *CleanupReport) {
+	removableFiles := getRemovableFiles()
 	for _, file := range removableFiles {
 		filePath := filepath.Join(outettsDir, file)
-		if _, err := os.Stat(filePath); err == nil {
+		if _, statErr := os.Stat(filePath); statErr == nil {
 			report.RemovedFiles = append(report.RemovedFiles, file)
 		}
 	}
+}
 
+func analyzeEssentialFiles(outettsDir string, report *CleanupReport) {
+	essentialFiles := getEssentialFiles()
 	for _, file := range essentialFiles {
 		filePath := filepath.Join(outettsDir, file)
-		if _, err := os.Stat(filePath); err == nil {
+		if _, statErr := os.Stat(filePath); statErr == nil {
 			report.KeptFiles = append(report.KeptFiles, file)
 		}
 	}
+}
 
-	// Analyze directories
+func analyzeFiles(outettsDir string, report *CleanupReport) {
+	analyzeRemovableFiles(outettsDir, report)
+	analyzeEssentialFiles(outettsDir, report)
+}
+
+func analyzeRemovableDirectories(
+	outettsDir string,
+	removableDirs []string,
+	report *CleanupReport,
+) {
 	for _, dir := range removableDirs {
 		dirPath := filepath.Join(outettsDir, dir)
-		if _, err := os.Stat(dirPath); err == nil {
+		if _, statErr := os.Stat(dirPath); statErr == nil {
 			report.RemovedDirs = append(report.RemovedDirs, dir)
 		}
 	}
+}
 
+func analyzeEssentialDirectories(
+	outettsDir string,
+	essentialDirs []string,
+	report *CleanupReport,
+) {
 	for _, dir := range essentialDirs {
 		dirPath := filepath.Join(outettsDir, dir)
-		if _, err := os.Stat(dirPath); err == nil {
+		if _, statErr := os.Stat(dirPath); statErr == nil {
 			report.KeptDirs = append(report.KeptDirs, dir)
 		}
 	}
+}
 
-	// Generate recommendations
-	report.Recommendations = []string{
+func analyzeDirectories(outettsDir string, report *CleanupReport) {
+	removableDirs, essentialDirs := getDirectoryLists()
+	analyzeRemovableDirectories(outettsDir, removableDirs, report)
+	analyzeEssentialDirectories(outettsDir, essentialDirs, report)
+}
+
+func generateRecommendations() []string {
+	return []string{
 		"Text chunking has been replaced by Go implementation in internal/chunking/",
 		"Text preprocessing can be implemented in Go using regex and unicode packages",
 		"AnyASCII conversion can be pure Go using unicode normalization",
@@ -139,81 +171,132 @@ func AnalyzeOuteTTSCleanup(outettsDir string) (*CleanupReport, error) {
 		"Keep core ML components (DAC, model loading, inference) in Python",
 		"Use Go for orchestration, Python for ML inference",
 	}
+}
+
+// AnalyzeOuteTTSCleanup analyzes the OuteTTS directory structure and generates
+// a cleanup report with recommendations for file and directory management.
+func AnalyzeOuteTTSCleanup(outettsDir string) (*CleanupReport, error) {
+	report := &CleanupReport{
+		RemovedFiles:    []string{},
+		RemovedDirs:     []string{},
+		KeptFiles:       []string{},
+		KeptDirs:        []string{},
+		Recommendations: []string{},
+		Errors:          []string{},
+	}
+
+	analyzeFiles(outettsDir, report)
+	analyzeDirectories(outettsDir, report)
+
+	report.Recommendations = generateRecommendations()
 
 	return report, nil
 }
 
-// PrintCleanupReport prints a formatted cleanup report.
-func PrintCleanupReport(report *CleanupReport) {
-	fmt.Println(reportHeaderAnalysis)
-	fmt.Println()
-
-	if len(report.RemovedFiles) > 0 {
-		fmt.Println(reportFilesRemoved)
-
-		for _, file := range report.RemovedFiles {
-			fmt.Printf(listItemFormat, file)
-		}
-
-		fmt.Println()
+// formatFileSection formats a file section for the cleanup report.
+func formatFileSection(title string, files []string) string {
+	if len(files) == 0 {
+		return ""
 	}
 
-	if len(report.RemovedDirs) > 0 {
-		fmt.Println(reportDirsRemoved)
+	var result strings.Builder
+	result.WriteString(title)
+	result.WriteString("\n")
 
-		for _, dir := range report.RemovedDirs {
-			fmt.Printf(listItemFormat, dir)
-		}
-
-		fmt.Println()
+	for _, file := range files {
+		result.WriteString(fmt.Sprintf(listItemFormat, file))
 	}
 
-	if len(report.KeptFiles) > 0 {
-		fmt.Println(reportFilesKept)
+	result.WriteString("\n")
 
-		for _, file := range report.KeptFiles {
-			fmt.Printf(listItemFormat, file)
-		}
+	return result.String()
+}
 
-		fmt.Println()
+func formatDirectorySection(title string, dirs []string) string {
+	if len(dirs) == 0 {
+		return ""
 	}
 
-	if len(report.KeptDirs) > 0 {
-		fmt.Println(reportDirsKept)
+	var result strings.Builder
+	result.WriteString(title)
+	result.WriteString("\n")
 
-		for _, dir := range report.KeptDirs {
-			fmt.Printf(listItemFormat, dir)
-		}
-
-		fmt.Println()
+	for _, dir := range dirs {
+		result.WriteString(fmt.Sprintf(listItemFormat, dir))
 	}
 
-	if len(report.Recommendations) > 0 {
-		fmt.Println(reportRecommendations)
+	result.WriteString("\n")
 
-		for _, rec := range report.Recommendations {
-			fmt.Printf(listItemFormat, rec)
-		}
+	return result.String()
+}
 
-		fmt.Println()
+func formatRecommendationsSection(recommendations []string) string {
+	if len(recommendations) == 0 {
+		return ""
 	}
 
-	if len(report.Errors) > 0 {
-		fmt.Println(reportErrors)
+	var result strings.Builder
+	result.WriteString(reportRecommendations)
+	result.WriteString("\n")
 
-		for _, err := range report.Errors {
-			fmt.Printf(listItemFormat, err)
-		}
-
-		fmt.Println()
+	for _, rec := range recommendations {
+		result.WriteString(fmt.Sprintf(listItemFormat, rec))
 	}
 
-	fmt.Println(reportHeaderSummary)
-	fmt.Printf(summaryFilesToRemove, len(report.RemovedFiles))
-	fmt.Printf(summaryDirsToRemove, len(report.RemovedDirs))
-	fmt.Printf(summaryFilesToKeep, len(report.KeptFiles))
-	fmt.Printf(summaryDirsToKeep, len(report.KeptDirs))
-	fmt.Printf(summaryRecommendations, len(report.Recommendations))
+	result.WriteString("\n")
+
+	return result.String()
+}
+
+func formatErrorsSection(errorList []string) string {
+	if len(errorList) == 0 {
+		return ""
+	}
+
+	var result strings.Builder
+	result.WriteString(reportErrors)
+	result.WriteString("\n")
+
+	for _, errorItem := range errorList {
+		result.WriteString(fmt.Sprintf(listItemFormat, errorItem))
+	}
+
+	result.WriteString("\n")
+
+	return result.String()
+}
+
+func formatSummarySection(report *CleanupReport) string {
+	var result strings.Builder
+	result.WriteString(reportHeaderSummary)
+	result.WriteString("\n")
+	result.WriteString(fmt.Sprintf(summaryFilesToRemove, len(report.RemovedFiles)))
+	result.WriteString(fmt.Sprintf(summaryDirsToRemove, len(report.RemovedDirs)))
+	result.WriteString(fmt.Sprintf(summaryFilesToKeep, len(report.KeptFiles)))
+	result.WriteString(fmt.Sprintf(summaryDirsToKeep, len(report.KeptDirs)))
+	result.WriteString(
+		fmt.Sprintf(summaryRecommendations, len(report.Recommendations)),
+	)
+
+	return result.String()
+}
+
+// FormatCleanupReport formats a cleanup report as a string.
+// It displays files and directories to be removed/kept, recommendations, and errors.
+func FormatCleanupReport(report *CleanupReport) string {
+	var result strings.Builder
+	result.WriteString(reportHeaderAnalysis)
+	result.WriteString("\n\n")
+
+	result.WriteString(formatFileSection(reportFilesRemoved, report.RemovedFiles))
+	result.WriteString(formatDirectorySection(reportDirsRemoved, report.RemovedDirs))
+	result.WriteString(formatFileSection(reportFilesKept, report.KeptFiles))
+	result.WriteString(formatDirectorySection(reportDirsKept, report.KeptDirs))
+	result.WriteString(formatRecommendationsSection(report.Recommendations))
+	result.WriteString(formatErrorsSection(report.Errors))
+	result.WriteString(formatSummarySection(report))
+
+	return result.String()
 }
 
 // GetGoReplacements returns a map of Python files to their Go replacements.
@@ -245,7 +328,8 @@ func ValidateGoImplementation() error {
 
 	if len(missing) > 0 {
 		return fmt.Errorf(
-			errMissingGoImpl,
+			"%w: %s",
+			ErrMissingGoImpl,
 			strings.Join(missing, replacementSeparator),
 		)
 	}

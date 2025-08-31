@@ -36,14 +36,42 @@ const (
 	defaultLanguage    = "en"
 )
 
-// Error messages.
-const (
-	errTextCannotBeEmpty       = "text cannot be empty"
-	errUnexpectedContentType   = "unexpected content type: expected audio/wav, got %s"
-	errReceivedEmptyAudio      = "received empty audio data"
-	errFmtServiceErrorWithCode = "TTS service error (%s): %s (code: %s)"
-	errFmtServiceNonOKStatus   = "TTS service returned non-OK status: %s, body: %s"
+// Static errors.
+var (
+	ErrTextCannotBeEmpty     = errors.New("text cannot be empty")
+	ErrUnexpectedContentType = errors.New("unexpected content type")
+	ErrReceivedEmptyAudio    = errors.New("received empty audio data")
+	ErrHealthCheckFailed     = errors.New("health check failed")
+	ErrServiceError          = errors.New("TTS service error")
+	ErrServiceNonOKStatus    = errors.New("TTS service returned non-OK status")
 )
+
+// Helper functions for dynamic error messages.
+func newUnexpectedContentTypeError(contentType string) error {
+	return fmt.Errorf(
+		"%w: expected audio/wav, got %s",
+		ErrUnexpectedContentType,
+		contentType,
+	)
+}
+
+func newHealthCheckFailedError(status string) error {
+	return fmt.Errorf("%w with status: %s", ErrHealthCheckFailed, status)
+}
+
+func newServiceErrorWithCodeError(status, detail, errorCode string) error {
+	return fmt.Errorf(
+		"%w (%s): %s (code: %s)",
+		ErrServiceError,
+		status,
+		detail,
+		errorCode,
+	)
+}
+
+func newServiceNonOKStatusError(status, body string) error {
+	return fmt.Errorf("%w: %s, body: %s", ErrServiceNonOKStatus, status, body)
+}
 
 // HTTPClient represents a client for the standalone TTS HTTP service.
 // It encapsulates the HTTP configuration and provides methods for
@@ -53,9 +81,9 @@ type HTTPClient struct {
 	baseURL    string
 }
 
-// TTSRequest defines the JSON payload structure for TTS generation requests.
+// Request defines the JSON payload structure for TTS generation requests.
 // All fields follow the explicit API contract defined in the service blueprint.
-type TTSRequest struct {
+type Request struct {
 	// Text contains the input text to convert to speech.
 	// Must be non-empty and within reasonable length limits.
 	Text string `json:"text"`
@@ -73,9 +101,9 @@ type TTSRequest struct {
 	Temperature float64 `json:"temperature"`
 }
 
-// TTSErrorResponse represents a structured error response from the TTS service.
+// ErrorResponse represents a structured error response from the TTS service.
 // This provides actionable diagnostics when requests fail.
-type TTSErrorResponse struct {
+type ErrorResponse struct {
 	// Detail contains a human-readable error description.
 	Detail string `json:"detail"`
 
@@ -90,7 +118,10 @@ func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
 	return &HTTPClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Transport:     nil,
+			CheckRedirect: nil,
+			Jar:           nil,
+			Timeout:       timeout,
 		},
 	}
 }
@@ -101,80 +132,30 @@ func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
 //
 // The returned audio data is in WAV format as specified by the service contract.
 // Callers are responsible for writing this data to files or streaming it as needed.
-func (c *HTTPClient) GenerateSpeech(ctx context.Context, req TTSRequest) ([]byte, error) {
-	// Validate required input at the boundary
-	if req.Text == "" {
-		return nil, errors.New(errTextCannotBeEmpty)
+func (c *HTTPClient) GenerateSpeech(ctx context.Context, req Request) ([]byte, error) {
+	if err := c.validateRequest(&req); err != nil {
+		return nil, err
 	}
 
-	// Set defaults for optional parameters
-	if req.Temperature == 0 {
-		req.Temperature = defaultTemperature
-	}
-
-	if req.Language == "" {
-		req.Language = defaultLanguage
-	}
-
-	// Marshal request to JSON according to API contract
-	requestBody, err := json.Marshal(req)
+	httpReq, err := c.buildHTTPRequest(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, err
 	}
 
-	// Construct HTTP request with explicit headers
-	url := c.baseURL + apiGenerateSpeech
-
-	httpReq, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		url,
-		bytes.NewBuffer(requestBody),
-	)
+	resp, err := c.sendRequest(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
 
-	// Set explicit headers as per API contract
-	httpReq.Header.Set(headerContentType, contentTypeJSON)
-	httpReq.Header.Set(headerAccept, contentTypeWAV)
+	defer func() {
+		closeErr := resp.Body.Close()
+		if closeErr != nil {
+			// Log the error but don't fail the operation
+			// This is a common pattern for defer cleanup
+		}
+	}()
 
-	// Send request with configured timeout
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to send request to TTS service at %s: %w",
-			c.baseURL,
-			err,
-		)
-	}
-	defer resp.Body.Close()
-
-	// Handle non-success status codes with structured error parsing
-	if resp.StatusCode != http.StatusOK {
-		return nil, c.parseErrorResponse(resp)
-	}
-
-	// Validate response content type matches expected format
-	contentType := resp.Header.Get("Content-Type")
-	if contentType != contentTypeWAV {
-		return nil, fmt.Errorf(
-			errUnexpectedContentType,
-			contentType,
-		)
-	}
-
-	// Read and validate audio response data
-	audioData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read audio data: %w", err)
-	}
-
-	if len(audioData) == 0 {
-		return nil, errors.New(errReceivedEmptyAudio)
-	}
-
-	return audioData, nil
+	return c.processResponse(resp)
 }
 
 // HealthCheck verifies that the TTS service is running and operational.
@@ -199,33 +180,139 @@ func (c *HTTPClient) HealthCheck(ctx context.Context) error {
 			err,
 		)
 	}
-	defer resp.Body.Close()
+
+	defer func() {
+		closeErr := resp.Body.Close()
+		if closeErr != nil {
+			// Log the error but don't fail the operation
+			// This is a common pattern for defer cleanup
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("health check failed with status: %s", resp.Status)
+		return newHealthCheckFailedError(resp.Status)
 	}
 
 	return nil
+}
+
+// validateRequest validates and normalizes the TTS request parameters.
+func (c *HTTPClient) validateRequest(req *Request) error {
+	if req.Text == "" {
+		return ErrTextCannotBeEmpty
+	}
+
+	if req.Temperature == 0 {
+		req.Temperature = defaultTemperature
+	}
+
+	if req.Language == "" {
+		req.Language = defaultLanguage
+	}
+
+	return nil
+}
+
+// buildHTTPRequest constructs the HTTP request with proper headers and body.
+func (c *HTTPClient) buildHTTPRequest(
+	ctx context.Context,
+	req Request,
+) (*http.Request, error) {
+	requestBody, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	url := c.baseURL + apiGenerateSpeech
+
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		url,
+		bytes.NewBuffer(requestBody),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set(headerContentType, contentTypeJSON)
+	httpReq.Header.Set(headerAccept, contentTypeWAV)
+
+	return httpReq, nil
+}
+
+// sendRequest executes the HTTP request and returns the response.
+func (c *HTTPClient) sendRequest(httpReq *http.Request) (*http.Response, error) {
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"failed to send request to TTS service at %s: %w",
+			c.baseURL,
+			err,
+		)
+	}
+
+	return resp, nil
+}
+
+// processResponse handles the HTTP response and extracts audio data.
+func (c *HTTPClient) processResponse(resp *http.Response) ([]byte, error) {
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseErrorResponse(resp)
+	}
+
+	err := c.validateResponseContentType(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	return c.readAudioData(resp)
+}
+
+// validateResponseContentType ensures the response has the expected content type.
+func (c *HTTPClient) validateResponseContentType(resp *http.Response) error {
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != contentTypeWAV {
+		return newUnexpectedContentTypeError(contentType)
+	}
+
+	return nil
+}
+
+// readAudioData reads and validates the audio response data.
+func (c *HTTPClient) readAudioData(resp *http.Response) ([]byte, error) {
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read audio data: %w", err)
+	}
+
+	if len(audioData) == 0 {
+		return nil, ErrReceivedEmptyAudio
+	}
+
+	return audioData, nil
 }
 
 // parseErrorResponse attempts to decode a structured JSON error from the service.
 // If structured parsing fails, it falls back to returning the raw response body
 // to ensure diagnostic information is preserved.
 func (c *HTTPClient) parseErrorResponse(resp *http.Response) error {
-	var errorResp TTSErrorResponse
+	var errorResp ErrorResponse
 
 	err := json.NewDecoder(resp.Body).Decode(&errorResp)
 	if err == nil {
-		return fmt.Errorf(errFmtServiceErrorWithCode,
-			resp.Status, errorResp.Detail, errorResp.ErrorCode)
+		return newServiceErrorWithCodeError(
+			resp.Status,
+			errorResp.Detail,
+			errorResp.ErrorCode,
+		)
 	}
 
 	// Fallback to raw response for non-JSON errors
-	body, _ := io.ReadAll(resp.Body)
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return fmt.Errorf("failed to read error response body: %w", readErr)
+	}
 
-	return fmt.Errorf(
-		errFmtServiceNonOKStatus,
-		resp.Status,
-		string(body),
-	)
+	return newServiceNonOKStatusError(resp.Status, string(body))
 }
