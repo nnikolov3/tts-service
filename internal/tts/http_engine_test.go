@@ -16,6 +16,10 @@ import (
 	"tts/internal/tts"
 )
 
+const (
+	healthPath = "/health"
+)
+
 // createTestConfig creates a minimal test configuration for HTTP engine testing.
 func createTestConfig(_ string) *config.Config {
 	return &config.Config{
@@ -145,8 +149,10 @@ func TestHTTPEngine_ProcessSingleChunk_Success(t *testing.T) {
 
 // createSingleChunkMockServer creates a mock server for single chunk processing tests.
 func createSingleChunkMockServer(t *testing.T, testAudioData string) *httptest.Server {
+	t.Helper()
+
 	responses := map[string]func(responseWriter http.ResponseWriter, request *http.Request){
-		"/health": func(responseWriter http.ResponseWriter, _ *http.Request) {
+		healthPath: func(responseWriter http.ResponseWriter, _ *http.Request) {
 			writeHealthResponse(responseWriter)
 		},
 		"/v1/generate/speech": func(responseWriter http.ResponseWriter, _ *http.Request) {
@@ -166,7 +172,10 @@ func writeHealthResponse(responseWriter http.ResponseWriter) {
 		"model_loaded": true,
 	}
 
-	_ = json.NewEncoder(responseWriter).Encode(healthResponse)
+	err := json.NewEncoder(responseWriter).Encode(healthResponse)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to encode health response: %v", err))
+	}
 }
 
 // writeAudioResponse writes an audio response.
@@ -174,11 +183,16 @@ func writeAudioResponse(responseWriter http.ResponseWriter, audioData string) {
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	_, _ = responseWriter.Write([]byte(audioData))
+	_, err := responseWriter.Write([]byte(audioData))
+	if err != nil {
+		panic(fmt.Sprintf("Failed to write audio response: %v", err))
+	}
 }
 
 // createTestEngine creates a test engine with the given server URL and output directory.
 func createTestEngine(t *testing.T, serverURL, tempDir string) *tts.HTTPEngine {
+	t.Helper()
+
 	cfg := createTestConfig(serverURL)
 
 	cfg.Paths.OutputDir = tempDir
@@ -190,12 +204,19 @@ func createTestEngine(t *testing.T, serverURL, tempDir string) *tts.HTTPEngine {
 }
 
 // closeEngine safely closes the engine.
-func closeEngine(_ *testing.T, engine *tts.HTTPEngine) {
-	_ = engine.Close()
+func closeEngine(t *testing.T, engine *tts.HTTPEngine) {
+	t.Helper()
+
+	err := engine.Close()
+	if err != nil {
+		t.Logf("Error closing engine during test cleanup: %v", err)
+	}
 }
 
 // validateOutputFile validates that the output file was created with correct content.
 func validateOutputFile(t *testing.T, outputPath, expectedContent string) {
+	t.Helper()
+
 	_, err := os.Stat(outputPath)
 	if os.IsNotExist(err) {
 		t.Fatal("Output file was not created")
@@ -283,18 +304,36 @@ func TestHTTPEngine_ProcessSingleChunk_EmptyOutputPath(t *testing.T) {
 
 // TestHTTPEngine_ProcessChunks_Success verifies successful chunks file processing.
 func setupMockTTSServer(t *testing.T, testAudioData string) *httptest.Server {
+	t.Helper()
+
 	responses := map[string]func(w http.ResponseWriter, r *http.Request){
-		"/health": func(w http.ResponseWriter, _ *http.Request) {
+		healthPath: func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{
+			err := json.NewEncoder(w).Encode(map[string]any{
 				"status":       "healthy",
 				"model_loaded": true,
 			})
+			if err != nil {
+				panic(
+					fmt.Sprintf(
+						"Failed to encode health response: %v",
+						err,
+					),
+				)
+			}
 		},
 		"/v1/generate/speech": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "audio/wav")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(testAudioData))
+			_, err := w.Write([]byte(testAudioData))
+			if err != nil {
+				panic(
+					fmt.Sprintf(
+						"Failed to write audio response: %v",
+						err,
+					),
+				)
+			}
 		},
 	}
 
@@ -302,6 +341,8 @@ func setupMockTTSServer(t *testing.T, testAudioData string) *httptest.Server {
 }
 
 func createTestChunksFile(t *testing.T, tempDir string) string {
+	t.Helper()
+
 	chunksPath := filepath.Join(tempDir, "chunks.json")
 	testChunks := []string{
 		"First chunk of text to process.",
@@ -326,6 +367,8 @@ func createTestChunksFile(t *testing.T, tempDir string) string {
 }
 
 func setupTestEngine(t *testing.T, serverURL, tempDir string) *tts.HTTPEngine {
+	t.Helper()
+
 	cfg := createTestConfig(serverURL)
 
 	cfg.Paths.OutputDir = tempDir
@@ -458,6 +501,8 @@ func createUnavailableMockServer(_ *testing.T) *httptest.Server {
 
 // createUnavailableTestEngine creates a test engine with unavailable server.
 func createUnavailableTestEngine(t *testing.T, serverURL string) *tts.HTTPEngine {
+	t.Helper()
+
 	cfg := createTestConfig(serverURL)
 	log := createTestLogger(t)
 
@@ -477,7 +522,7 @@ func setupBenchmarkServer() *httptest.Server {
 
 // handleBenchmarkRequest handles benchmark requests based on path.
 func handleBenchmarkRequest(responseWriter http.ResponseWriter, request *http.Request) {
-	if request.URL.Path == "/health" {
+	if request.URL.Path == healthPath {
 		writeBenchmarkHealthResponse(responseWriter)
 
 		return
@@ -495,7 +540,12 @@ func writeBenchmarkHealthResponse(responseWriter http.ResponseWriter) {
 		"model_loaded": true,
 	}
 
-	_ = json.NewEncoder(responseWriter).Encode(healthResponse)
+	err := json.NewEncoder(responseWriter).Encode(healthResponse)
+	if err != nil {
+		// Panicking is acceptable in a benchmark setup as it indicates a fatal
+		// test bug.
+		panic(fmt.Sprintf("Failed to write benchmark health response: %v", err))
+	}
 }
 
 // writeBenchmarkAudioResponse writes an audio response for benchmarks.
@@ -503,7 +553,10 @@ func writeBenchmarkAudioResponse(responseWriter http.ResponseWriter) {
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	_, _ = responseWriter.Write([]byte("benchmark-audio-data"))
+	_, err := responseWriter.Write([]byte("benchmark-audio-data"))
+	if err != nil {
+		panic(fmt.Sprintf("Failed to write benchmark audio response: %v", err))
+	}
 }
 
 func setupBenchmarkEngine(b *testing.B, serverURL, tempDir string) *tts.HTTPEngine {

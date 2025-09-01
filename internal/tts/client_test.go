@@ -45,6 +45,8 @@ const (
 )
 
 func validateRequestMethod(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	if request.Method != http.MethodPost {
 		t.Errorf(TestErrExpectedPostRequest, request.Method)
 	}
@@ -55,6 +57,8 @@ func validateRequestMethod(t *testing.T, request *http.Request) {
 }
 
 func validateRequestHeaders(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	if request.Header.Get("Content-Type") != "application/json" {
 		t.Error(TestErrExpectedJSONContentType)
 	}
@@ -65,6 +69,8 @@ func validateRequestHeaders(t *testing.T, request *http.Request) {
 }
 
 func validateRequestBody(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	var req tts.Request
 
 	decodeErr := json.NewDecoder(request.Body).Decode(&req)
@@ -86,6 +92,7 @@ func validateRequestBody(t *testing.T, request *http.Request) {
 }
 
 func sendMockWAVResponse(t *testing.T, responseWriter http.ResponseWriter) {
+	t.Helper()
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
@@ -96,6 +103,8 @@ func sendMockWAVResponse(t *testing.T, responseWriter http.ResponseWriter) {
 }
 
 func createMockTTSHandler(t *testing.T) http.HandlerFunc {
+	t.Helper()
+
 	return func(responseWriter http.ResponseWriter, request *http.Request) {
 		validateRequestMethod(t, request)
 		validateRequestHeaders(t, request)
@@ -105,6 +114,8 @@ func createMockTTSHandler(t *testing.T) http.HandlerFunc {
 }
 
 func validateGeneratedAudio(t *testing.T, audioData []byte) {
+	t.Helper()
+
 	if len(audioData) == 0 {
 		t.Error(TestErrExpectedNonEmptyAudio)
 	}
@@ -222,7 +233,8 @@ func TestClient_GenerateSpeech_WrongContentType(t *testing.T) {
 					Set("Content-Type", "text/plain")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, err := responseWriter.Write([]byte("Not audio data")); err != nil {
+				_, err := responseWriter.Write([]byte("Not audio data"))
+				if err != nil {
 					t.Fatalf("Failed to write mock response: %v", err)
 				}
 			},
@@ -265,6 +277,8 @@ func TestClient_HealthCheck_Success(t *testing.T) {
 
 // createHealthyMockServer creates a mock server that responds with healthy status.
 func createHealthyMockServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
 	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -277,6 +291,8 @@ func createHealthyMockServer(t *testing.T) *httptest.Server {
 
 // validateHealthRequest validates the incoming health check request.
 func validateHealthRequest(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	if request.URL.Path != "/health" {
 		t.Errorf(TestErrExpectedHealthPath, request.URL.Path)
 	}
@@ -288,6 +304,7 @@ func validateHealthRequest(t *testing.T, request *http.Request) {
 
 // writeHealthyResponse writes a healthy status response.
 func writeHealthyResponse(t *testing.T, responseWriter http.ResponseWriter) {
+	t.Helper()
 	responseWriter.Header().Set("Content-Type", "application/json")
 	responseWriter.WriteHeader(http.StatusOK)
 

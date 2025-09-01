@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nnikolov3/configurator"
@@ -157,13 +158,12 @@ func Load(startDir string) (*Config, string, error) {
 	}
 
 	// Resolve relative paths to absolute paths based on project root
-	if err := cfg.resolvePaths(projectRoot); err != nil {
-		return nil, "", fmt.Errorf(errFailedToResolvePaths, err)
-	}
+	cfg.resolvePaths(projectRoot)
 
 	// Validate configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, "", fmt.Errorf(errInvalidConfiguration, err)
+	validationErr := cfg.Validate()
+	if validationErr != nil {
+		return nil, "", fmt.Errorf(errInvalidConfiguration, validationErr)
 	}
 
 	return &cfg, projectRoot, nil
@@ -207,16 +207,19 @@ func (c *TTSConfig) Validate() error {
 
 // Validate validates the paths configuration.
 func (c *PathsConfig) Validate() error {
-	paths := map[string]string{
-		"input_dir":  c.InputDir,
-		"output_dir": c.OutputDir,
-		"logs_dir":   c.LogsDir,
-		"models_dir": c.ModelsDir,
+	fieldsToValidate := []struct {
+		Name  string
+		Value string
+	}{
+		{"input_dir", c.InputDir},
+		{"output_dir", c.OutputDir},
+		{"logs_dir", c.LogsDir},
+		{"models_dir", c.ModelsDir},
 	}
 
-	for name, path := range paths {
-		if path == "" {
-			return newFieldCannotBeEmptyError(name)
+	for _, field := range fieldsToValidate {
+		if field.Value == "" {
+			return newFieldCannotBeEmptyError(field.Name)
 		}
 	}
 
@@ -230,7 +233,7 @@ func (c *LoggingConfig) Validate() error {
 	}
 
 	validLevels := []string{"debug", "info", "warn", "error"}
-	if !contains(validLevels, c.Level) {
+	if !slices.Contains(validLevels, c.Level) {
 		return newInvalidLevelError(validLevels)
 	}
 
@@ -306,7 +309,7 @@ func (c *TTSConfig) validateAdvancedParams() error {
 	}
 
 	validQualities := []string{"fast", "balanced", "high"}
-	if !contains(validQualities, c.Quality) {
+	if !slices.Contains(validQualities, c.Quality) {
 		return newInvalidQualityError(validQualities)
 	}
 
@@ -364,21 +367,8 @@ func (c *Config) resolveLoggingPath(projectRoot string) {
 	}
 }
 
-func (c *Config) resolvePaths(projectRoot string) error {
+func (c *Config) resolvePaths(projectRoot string) {
 	c.resolveTTSPath(projectRoot)
 	c.resolveDirectoryPaths(projectRoot)
 	c.resolveLoggingPath(projectRoot)
-
-	return nil
-}
-
-// contains checks if a slice contains a string.
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-
-	return false
 }

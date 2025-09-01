@@ -101,6 +101,8 @@ func validateHTTPRequestHeaders(t *testing.T, request *http.Request) {
 }
 
 func validateHTTPRequestBody(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	var req tts.Request
 
 	err := json.NewDecoder(request.Body).Decode(&req)
@@ -113,6 +115,8 @@ func validateHTTPRequestBody(t *testing.T, request *http.Request) {
 }
 
 func validateRequestFields(t *testing.T, actual, expected tts.Request) {
+	t.Helper()
+
 	if actual.Text != expected.Text {
 		t.Errorf(
 			"Expected text %q, got %q",
@@ -152,10 +156,12 @@ func sendSuccessResponse(
 	responseWriter http.ResponseWriter,
 	testAudioData string,
 ) {
+	t.Helper()
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	if _, err := responseWriter.Write([]byte(testAudioData)); err != nil {
+	_, err := responseWriter.Write([]byte(testAudioData))
+	if err != nil {
 		t.Fatalf("Failed to write mock success response: %v", err)
 	}
 }
@@ -207,6 +213,8 @@ func TestHTTPClient_GenerateSpeech_ServerError(t *testing.T) {
 
 // createServerErrorMockServer creates a mock server that returns server error.
 func createServerErrorMockServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
 	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, _ *http.Request) {
@@ -218,6 +226,7 @@ func createServerErrorMockServer(t *testing.T) *httptest.Server {
 
 // writeServerErrorResponse writes a server error response.
 func writeServerErrorResponse(t *testing.T, responseWriter http.ResponseWriter) {
+	t.Helper()
 	responseWriter.Header().Set("Content-Type", "application/json")
 	responseWriter.WriteHeader(http.StatusInternalServerError)
 
@@ -234,6 +243,8 @@ func writeServerErrorResponse(t *testing.T, responseWriter http.ResponseWriter) 
 
 // validateServerErrorResponse validates the server error response.
 func validateServerErrorResponse(t *testing.T, err error) {
+	t.Helper()
+
 	if err == nil {
 		t.Fatal("Expected error for server error, got nil")
 	}
@@ -385,6 +396,8 @@ func TestHTTPClient_HealthCheck_Success(t *testing.T) {
 
 // createHealthCheckMockServer creates a mock server for health check tests.
 func createHealthCheckMockServer(t *testing.T) *httptest.Server {
+	t.Helper()
+
 	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, request *http.Request) {
@@ -397,6 +410,8 @@ func createHealthCheckMockServer(t *testing.T) *httptest.Server {
 
 // validateHealthCheckRequest validates the health check request.
 func validateHealthCheckRequest(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	if request.Method != http.MethodGet {
 		t.Errorf("Expected GET, got %s", request.Method)
 	}
@@ -408,6 +423,7 @@ func validateHealthCheckRequest(t *testing.T, request *http.Request) {
 
 // writeHealthCheckResponse writes a successful health check response.
 func writeHealthCheckResponse(t *testing.T, responseWriter http.ResponseWriter) {
+	t.Helper()
 	responseWriter.WriteHeader(http.StatusOK)
 
 	healthResponse := map[string]any{
