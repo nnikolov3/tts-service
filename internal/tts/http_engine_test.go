@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"logger"
+	"github.com/nnikolov3/logger"
 
 	"tts/internal/config"
 	"tts/internal/tts"

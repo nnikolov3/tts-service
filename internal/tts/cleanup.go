@@ -17,10 +17,10 @@ import (
 const (
 	reportHeaderAnalysis  = "=== OuteTTS Cleanup Analysis ==="
 	reportHeaderSummary   = "=== Summary ==="
-	reportFilesRemoved    = "📁 Files that can be removed (replaced by Go):"
-	reportDirsRemoved     = "📂 Directories that can be removed:"
-	reportFilesKept       = "🔒 Essential files to keep (ML functionality):"
-	reportDirsKept        = "🔒 Essential directories to keep:"
+	reportFilesRemoved    = "🗑️ Files that can be removed (replaced by Go):"
+	reportDirsRemoved     = "🗑️ Directories that can be removed:"
+	reportFilesKept       = "✅ Essential files to keep (ML functionality):"
+	reportDirsKept        = "✅ Essential directories to keep:"
 	reportRecommendations = "💡 Recommendations:"
 	reportErrors          = "❌ Errors encountered:"
 )
@@ -107,7 +107,9 @@ func analyzeRemovableFiles(outettsDir string, report *CleanupReport) {
 	removableFiles := getRemovableFiles()
 	for _, file := range removableFiles {
 		filePath := filepath.Join(outettsDir, file)
-		if _, statErr := os.Stat(filePath); statErr == nil {
+
+		_, statErr := os.Stat(filePath)
+		if statErr == nil {
 			report.RemovedFiles = append(report.RemovedFiles, file)
 		}
 	}
@@ -117,7 +119,9 @@ func analyzeEssentialFiles(outettsDir string, report *CleanupReport) {
 	essentialFiles := getEssentialFiles()
 	for _, file := range essentialFiles {
 		filePath := filepath.Join(outettsDir, file)
-		if _, statErr := os.Stat(filePath); statErr == nil {
+
+		_, statErr := os.Stat(filePath)
+		if statErr == nil {
 			report.KeptFiles = append(report.KeptFiles, file)
 		}
 	}
@@ -135,7 +139,9 @@ func analyzeRemovableDirectories(
 ) {
 	for _, dir := range removableDirs {
 		dirPath := filepath.Join(outettsDir, dir)
-		if _, statErr := os.Stat(dirPath); statErr == nil {
+
+		_, statErr := os.Stat(dirPath)
+		if statErr == nil {
 			report.RemovedDirs = append(report.RemovedDirs, dir)
 		}
 	}
@@ -148,7 +154,9 @@ func analyzeEssentialDirectories(
 ) {
 	for _, dir := range essentialDirs {
 		dirPath := filepath.Join(outettsDir, dir)
-		if _, statErr := os.Stat(dirPath); statErr == nil {
+
+		_, statErr := os.Stat(dirPath)
+		if statErr == nil {
 			report.KeptDirs = append(report.KeptDirs, dir)
 		}
 	}
@@ -318,7 +326,8 @@ func ValidateGoImplementation() error {
 	var missing []string
 
 	for pythonFile, goFile := range replacements {
-		if _, err := os.Stat(goFile); os.IsNotExist(err) {
+		_, err := os.Stat(goFile)
+		if os.IsNotExist(err) {
 			missing = append(
 				missing,
 				fmt.Sprintf(replacementFormat, pythonFile, goFile),

@@ -54,7 +54,7 @@ test-python:
 # Run linter on Go code
 lint:
 	@echo "Running golangci-lint..."
-	golangci-lint run
+	golangci-lint run --fix
 
 # Format Go code
 fmt:

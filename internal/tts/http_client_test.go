@@ -272,7 +272,8 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 				responseWriter.Header().Set("Content-Type", "text/plain")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, err := responseWriter.Write([]byte("not audio data")); err != nil {
+				_, err := responseWriter.Write([]byte("not audio data"))
+				if err != nil {
 					t.Fatalf(
 						"Failed to write mock wrong content type response: %v",
 						err,
@@ -350,7 +351,8 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 				responseWriter.Header().Set("Content-Type", "audio/wav")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, err := responseWriter.Write([]byte("audio-data")); err != nil {
+				_, err := responseWriter.Write([]byte("audio-data"))
+				if err != nil {
 					t.Fatalf(
 						"Failed to write mock timeout response: %v",
 						err,
@@ -484,9 +486,10 @@ func BenchmarkHTTPClient_GenerateSpeech(b *testing.B) {
 				responseWriter.Header().Set("Content-Type", "audio/wav")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, err := responseWriter.Write(
+				_, err := responseWriter.Write(
 					[]byte("mock-audio-data-for-benchmark"),
-				); err != nil {
+				)
+				if err != nil {
 					b.Fatalf(
 						"Failed to write mock benchmark response: %v",
 						err,

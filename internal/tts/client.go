@@ -134,7 +134,8 @@ func NewHTTPClient(baseURL string, timeout time.Duration) *HTTPClient {
 // The returned audio data is in WAV format as specified by the service contract.
 // Callers are responsible for writing this data to files or streaming it as needed.
 func (c *HTTPClient) GenerateSpeech(ctx context.Context, req Request) ([]byte, error) {
-	if err := c.validateRequest(&req); err != nil {
+	err := c.validateRequest(&req)
+	if err != nil {
 		return nil, err
 	}
 

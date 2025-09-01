@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"logger"
+	"github.com/nnikolov3/logger"
 
 	"tts/internal/config"
 	"tts/internal/tts"
@@ -157,7 +157,8 @@ func setup(
 		return nil, nil, "", err
 	}
 
-	if err := ensureDirectories(cfg, lgr); err != nil {
+	err = ensureDirectories(cfg, lgr)
+	if err != nil {
 		return nil, nil, "", err
 	}
 
@@ -218,7 +219,7 @@ func handleHealthCheck(cfg *config.Config, lgr *logger.Logger) error {
 		lgr.Error(errHealthCheckFailed, err)
 		lgr.Error(errServiceNotHealthy, err)
 
-		return err
+		return fmt.Errorf("health check failed: %w", err)
 	}
 
 	lgr.Info(errServiceHealthy)

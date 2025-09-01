@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"logger"
+	"github.com/nnikolov3/logger"
 
 	"tts/internal/config"
 )
@@ -251,7 +251,9 @@ func (e *HTTPEngine) readChunksFile(chunksPath string) ([]string, error) {
 
 	// Parse JSON chunks as array of strings
 	var chunks []string
-	if err := parseJSON(data, &chunks); err != nil {
+
+	err = parseJSON(data, &chunks)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse chunks JSON: %w", err)
 	}
 
