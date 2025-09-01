@@ -62,7 +62,7 @@ func createSuccessHandler(t *testing.T, testAudioData string) http.HandlerFunc {
 			validateHTTPRequestMethod(t, request)
 			validateHTTPRequestHeaders(t, request)
 			validateHTTPRequestBody(t, request)
-			sendSuccessResponse(responseWriter, testAudioData)
+			sendSuccessResponse(t, responseWriter, testAudioData)
 		},
 	)
 }
@@ -147,15 +147,16 @@ func createStandardTestRequest() tts.Request {
 	}
 }
 
-func sendSuccessResponse(responseWriter http.ResponseWriter, testAudioData string) {
+func sendSuccessResponse(
+	t *testing.T,
+	responseWriter http.ResponseWriter,
+	testAudioData string,
+) {
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	if _, writeErr := responseWriter.Write([]byte(testAudioData)); writeErr != nil {
-		// In test context, we can't easily propagate this error, but we should
-		// handle it
-		// This prevents the gosec G104 warning about unhandled errors
-		_ = writeErr
+	if _, err := responseWriter.Write([]byte(testAudioData)); err != nil {
+		t.Fatalf("Failed to write mock success response: %v", err)
 	}
 }
 
@@ -205,18 +206,18 @@ func TestHTTPClient_GenerateSpeech_ServerError(t *testing.T) {
 }
 
 // createServerErrorMockServer creates a mock server that returns server error.
-func createServerErrorMockServer(_ *testing.T) *httptest.Server {
+func createServerErrorMockServer(t *testing.T) *httptest.Server {
 	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, _ *http.Request) {
-				writeServerErrorResponse(responseWriter)
+				writeServerErrorResponse(t, responseWriter)
 			},
 		),
 	)
 }
 
 // writeServerErrorResponse writes a server error response.
-func writeServerErrorResponse(responseWriter http.ResponseWriter) {
+func writeServerErrorResponse(t *testing.T, responseWriter http.ResponseWriter) {
 	responseWriter.Header().Set("Content-Type", "application/json")
 	responseWriter.WriteHeader(http.StatusInternalServerError)
 
@@ -225,12 +226,9 @@ func writeServerErrorResponse(responseWriter http.ResponseWriter) {
 		ErrorCode: "MODEL_LOAD_ERROR",
 	}
 
-	encodeErr := json.NewEncoder(responseWriter).Encode(errorResp)
-	if encodeErr != nil {
-		// In test context, we can't easily propagate this error, but we should
-		// handle it
-		// This prevents the gosec G104 warning about unhandled errors
-		_ = encodeErr
+	err := json.NewEncoder(responseWriter).Encode(errorResp)
+	if err != nil {
+		t.Fatalf("Failed to encode mock server error response: %v", err)
 	}
 }
 
@@ -263,11 +261,11 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 				responseWriter.Header().Set("Content-Type", "text/plain")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, writeErr := responseWriter.Write([]byte("not audio data")); writeErr != nil {
-					// In test context, we can't easily propagate this
-					// error, but we should handle it This prevents
-					// the gosec G104 warning about unhandled errors
-					_ = writeErr
+				if _, err := responseWriter.Write([]byte("not audio data")); err != nil {
+					t.Fatalf(
+						"Failed to write mock wrong content type response: %v",
+						err,
+					)
 				}
 			},
 		),
@@ -341,11 +339,11 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 				responseWriter.Header().Set("Content-Type", "audio/wav")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, writeErr := responseWriter.Write([]byte("audio-data")); writeErr != nil {
-					// In test context, we can't easily propagate this
-					// error, but we should handle it This prevents
-					// the gosec G104 warning about unhandled errors
-					_ = writeErr
+				if _, err := responseWriter.Write([]byte("audio-data")); err != nil {
+					t.Fatalf(
+						"Failed to write mock timeout response: %v",
+						err,
+					)
 				}
 			},
 		),
@@ -391,7 +389,7 @@ func createHealthCheckMockServer(t *testing.T) *httptest.Server {
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, request *http.Request) {
 				validateHealthCheckRequest(t, request)
-				writeHealthCheckResponse(responseWriter)
+				writeHealthCheckResponse(t, responseWriter)
 			},
 		),
 	)
@@ -409,7 +407,7 @@ func validateHealthCheckRequest(t *testing.T, request *http.Request) {
 }
 
 // writeHealthCheckResponse writes a successful health check response.
-func writeHealthCheckResponse(responseWriter http.ResponseWriter) {
+func writeHealthCheckResponse(t *testing.T, responseWriter http.ResponseWriter) {
 	responseWriter.WriteHeader(http.StatusOK)
 
 	healthResponse := map[string]any{
@@ -417,12 +415,9 @@ func writeHealthCheckResponse(responseWriter http.ResponseWriter) {
 		"model_loaded": true,
 	}
 
-	encodeErr := json.NewEncoder(responseWriter).Encode(healthResponse)
-	if encodeErr != nil {
-		// In test context, we can't easily propagate this error, but we should
-		// handle it
-		// This prevents the gosec G104 warning about unhandled errors
-		_ = encodeErr
+	err := json.NewEncoder(responseWriter).Encode(healthResponse)
+	if err != nil {
+		t.Fatalf("Failed to encode mock health response: %v", err)
 	}
 }
 
@@ -473,13 +468,13 @@ func BenchmarkHTTPClient_GenerateSpeech(b *testing.B) {
 				responseWriter.Header().Set("Content-Type", "audio/wav")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, writeErr := responseWriter.Write(
+				if _, err := responseWriter.Write(
 					[]byte("mock-audio-data-for-benchmark"),
-				); writeErr != nil {
-					// In test context, we can't easily propagate this
-					// error, but we should handle it This prevents
-					// the gosec G104 warning about unhandled errors
-					_ = writeErr
+				); err != nil {
+					b.Fatalf(
+						"Failed to write mock benchmark response: %v",
+						err,
+					)
 				}
 			},
 		),

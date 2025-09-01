@@ -65,8 +65,8 @@ import (
 
 - Use camelCase for variables and functions.
 - Use PascalCase for exported types and functions.
-- Use ALL_CAPS for constants.
 - Add context to names in large scopes.
+- Use self-documenting code paradigm.
 
 **Example**:
 

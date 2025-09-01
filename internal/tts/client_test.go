@@ -1,4 +1,4 @@
-package tts
+package tts_test
 
 import (
 	"context"
@@ -8,87 +8,91 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tts/internal/tts"
 )
 
 // Test constants.
 const (
-	testHelloWorld                     = "Hello, world!"
-	testWAVHeaderMinimal               = "RIFF....WAVE"
-	testWAVPrefix                      = "RIFF"
-	testErrMsgInvalidSpeakerPath       = "Invalid speaker reference path"
-	testErrCodeInvalidSpeakerPath      = "INVALID_SPEAKER_PATH"
-	testErrExpectedPostRequest         = "Expected POST request, got %s"
-	testErrExpectedGeneratePath        = "Expected /v1/generate/speech path, got %s"
-	testErrExpectedJSONContentType     = "Expected application/json content type"
-	testErrExpectedWAVAccept           = "Expected audio/wav accept type"
-	testErrFailedToDecodeRequest       = "Failed to decode request: %v"
-	testErrExpectedHelloWorld          = "Expected 'Hello, world!', got '%s'"
-	testErrExpectedTemperature         = "Expected temperature 0.8, got %f"
-	testErrExpectedLanguage            = "Expected language 'en', got '%s'"
-	testErrGenerateSpeechFailed        = "GenerateSpeech failed: %v"
-	testErrExpectedNonEmptyAudio       = "Expected non-empty audio data"
-	testErrExpectedWAVFormat           = "Expected WAV format audio data"
-	testErrExpectedForEmptyText        = "Expected error for empty text"
-	testErrExpectedEmptyTextError      = "Expected 'text cannot be empty' error, got: %v"
-	testErrExpectedForInvalidSpeaker   = "Expected error for invalid speaker path"
-	testErrExpectedSpecificError       = "Expected specific error message, got: %v"
-	testErrExpectedErrorCode           = "Expected error code in message, got: %v"
-	testErrExpectedForWrongContentType = "Expected error for wrong content type"
-	testErrExpectedContentTypeError    = "Expected content type error, got: %v"
-	testErrExpectedHealthPath          = "Expected /health path, got %s"
-	testErrExpectedGetRequest          = "Expected GET request, got %s"
-	testErrHealthCheckFailed           = "HealthCheck failed: %v"
-	testErrExpectedForUnreachable      = "Expected error for unreachable service"
-	testErrExpectedTimeout             = "Expected timeout error"
-	testMsgTextShouldBePreserved       = "Text should be preserved"
+	TestHelloWorld                     = "Hello, world!"
+	TestWAVHeaderMinimal               = "RIFF....WAVE"
+	TestWAVPrefix                      = "RIFF"
+	TestErrMsgInvalidSpeakerPath       = "Invalid speaker reference path"
+	TestErrCodeInvalidSpeakerPath      = "INVALID_SPEAKER_PATH"
+	TestErrExpectedPostRequest         = "Expected POST request, got %s"
+	TestErrExpectedGeneratePath        = "Expected /v1/generate/speech path, got %s"
+	TestErrExpectedJSONContentType     = "Expected application/json content type"
+	TestErrExpectedWAVAccept           = "Expected audio/wav accept type"
+	TestErrFailedToDecodeRequest       = "Failed to decode request: %v"
+	TestErrExpectedHelloWorld          = "Expected 'Hello, world!', got '%s'"
+	TestErrExpectedTemperature         = "Expected temperature 0.8, got %f"
+	TestErrExpectedLanguage            = "Expected language 'en', got '%s'"
+	TestErrGenerateSpeechFailed        = "GenerateSpeech failed: %v"
+	TestErrExpectedNonEmptyAudio       = "Expected non-empty audio data"
+	TestErrExpectedWAVFormat           = "Expected WAV format audio data"
+	TestErrExpectedForEmptyText        = "Expected error for empty text"
+	TestErrExpectedEmptyTextError      = "Expected 'text cannot be empty' error, got: %v"
+	TestErrExpectedForInvalidSpeaker   = "Expected error for invalid speaker path"
+	TestErrExpectedSpecificError       = "Expected specific error message, got: %v"
+	TestErrExpectedErrorCode           = "Expected error code in message, got: %v"
+	TestErrExpectedForWrongContentType = "Expected error for wrong content type"
+	TestErrExpectedContentTypeError    = "Expected content type error, got: %v"
+	TestErrExpectedHealthPath          = "Expected /health path, got %s"
+	TestErrExpectedGetRequest          = "Expected GET request, got %s"
+	TestErrHealthCheckFailed           = "HealthCheck failed: %v"
+	TestErrExpectedForUnreachable      = "Expected error for unreachable service"
+	TestErrExpectedTimeout             = "Expected timeout error"
 )
 
 func validateRequestMethod(t *testing.T, request *http.Request) {
 	if request.Method != http.MethodPost {
-		t.Errorf(testErrExpectedPostRequest, request.Method)
+		t.Errorf(TestErrExpectedPostRequest, request.Method)
 	}
 
-	if request.URL.Path != apiGenerateSpeech {
-		t.Errorf(testErrExpectedGeneratePath, request.URL.Path)
+	if request.URL.Path != "/v1/generate/speech" {
+		t.Errorf(TestErrExpectedGeneratePath, request.URL.Path)
 	}
 }
 
 func validateRequestHeaders(t *testing.T, request *http.Request) {
-	if request.Header.Get(headerContentType) != contentTypeJSON {
-		t.Error(testErrExpectedJSONContentType)
+	if request.Header.Get("Content-Type") != "application/json" {
+		t.Error(TestErrExpectedJSONContentType)
 	}
 
-	if request.Header.Get(headerAccept) != contentTypeWAV {
-		t.Error(testErrExpectedWAVAccept)
+	if request.Header.Get("Accept") != "audio/wav" {
+		t.Error(TestErrExpectedWAVAccept)
 	}
 }
 
 func validateRequestBody(t *testing.T, request *http.Request) {
-	var req Request
+	var req tts.Request
 
 	decodeErr := json.NewDecoder(request.Body).Decode(&req)
 	if decodeErr != nil {
-		t.Errorf(testErrFailedToDecodeRequest, decodeErr)
+		t.Fatalf(TestErrFailedToDecodeRequest, decodeErr)
 	}
 
-	if req.Text != testHelloWorld {
-		t.Errorf(testErrExpectedHelloWorld, req.Text)
+	if req.Text != TestHelloWorld {
+		t.Errorf(TestErrExpectedHelloWorld, req.Text)
 	}
 
 	if req.Temperature != 0.8 {
-		t.Errorf(testErrExpectedTemperature, req.Temperature)
+		t.Errorf(TestErrExpectedTemperature, req.Temperature)
 	}
 
 	if req.Language != "en" {
-		t.Errorf(testErrExpectedLanguage, req.Language)
+		t.Errorf(TestErrExpectedLanguage, req.Language)
 	}
 }
 
-func sendMockWAVResponse(responseWriter http.ResponseWriter) {
-	responseWriter.Header().Set(headerContentType, contentTypeWAV)
+func sendMockWAVResponse(t *testing.T, responseWriter http.ResponseWriter) {
+	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	_, _ = responseWriter.Write([]byte(testWAVHeaderMinimal))
+	_, err := responseWriter.Write([]byte(TestWAVHeaderMinimal))
+	if err != nil {
+		t.Fatalf("Failed to write mock WAV response: %v", err)
+	}
 }
 
 func createMockTTSHandler(t *testing.T) http.HandlerFunc {
@@ -96,52 +100,52 @@ func createMockTTSHandler(t *testing.T) http.HandlerFunc {
 		validateRequestMethod(t, request)
 		validateRequestHeaders(t, request)
 		validateRequestBody(t, request)
-		sendMockWAVResponse(responseWriter)
+		sendMockWAVResponse(t, responseWriter)
 	}
 }
 
 func validateGeneratedAudio(t *testing.T, audioData []byte) {
 	if len(audioData) == 0 {
-		t.Error(testErrExpectedNonEmptyAudio)
+		t.Error(TestErrExpectedNonEmptyAudio)
 	}
 
-	if !strings.HasPrefix(string(audioData), testWAVPrefix) {
-		t.Error(testErrExpectedWAVFormat)
+	if !strings.HasPrefix(string(audioData), TestWAVPrefix) {
+		t.Error(TestErrExpectedWAVFormat)
 	}
 }
 
-func TestHTTPClient_GenerateSpeech_Success(t *testing.T) {
+func TestClient_GenerateSpeech_Success(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(createMockTTSHandler(t))
 	defer server.Close()
 
-	client := NewHTTPClient(server.URL, 10*time.Second)
+	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 	req := createTestRequest()
 
 	audioData, generateErr := client.GenerateSpeech(context.Background(), req)
 	if generateErr != nil {
-		t.Errorf(testErrGenerateSpeechFailed, generateErr)
+		t.Errorf(TestErrGenerateSpeechFailed, generateErr)
 	}
 
 	validateGeneratedAudio(t, audioData)
 }
 
-func createTestRequest() Request {
-	return Request{
-		Text:           testHelloWorld,
+func createTestRequest() tts.Request {
+	return tts.Request{
+		Text:           TestHelloWorld,
 		SpeakerRefPath: "",
 		Temperature:    0.8,
 		Language:       "en",
 	}
 }
 
-func TestHTTPClient_GenerateSpeech_EmptyText(t *testing.T) {
+func TestClient_GenerateSpeech_EmptyText(t *testing.T) {
 	t.Parallel()
 
-	client := NewHTTPClient("http://localhost:8000", 10*time.Second)
+	client := tts.NewHTTPClient("http://localhost:8000", 10*time.Second)
 
-	req := Request{
+	req := tts.Request{
 		Text:           "",
 		SpeakerRefPath: "",
 		Temperature:    0.75,
@@ -150,39 +154,45 @@ func TestHTTPClient_GenerateSpeech_EmptyText(t *testing.T) {
 
 	_, err := client.GenerateSpeech(context.Background(), req)
 	if err == nil {
-		t.Error(testErrExpectedForEmptyText)
+		t.Error(TestErrExpectedForEmptyText)
 	}
 
 	if !strings.Contains(err.Error(), "text cannot be empty") {
-		t.Errorf(testErrExpectedEmptyTextError, err)
+		t.Errorf(TestErrExpectedEmptyTextError, err)
 	}
 }
 
-func TestHTTPClient_GenerateSpeech_ServiceError(t *testing.T) {
+func TestClient_GenerateSpeech_ServiceError(t *testing.T) {
 	t.Parallel()
 	// Mock TTS service that returns an error
 	server := httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, _ *http.Request) {
 				responseWriter.Header().
-					Set(headerContentType, contentTypeJSON)
+					Set("Content-Type", "application/json")
 				responseWriter.WriteHeader(http.StatusBadRequest)
 
-				errorResp := ErrorResponse{
-					Detail:    testErrMsgInvalidSpeakerPath,
-					ErrorCode: testErrCodeInvalidSpeakerPath,
+				errorResp := tts.ErrorResponse{
+					Detail:    TestErrMsgInvalidSpeakerPath,
+					ErrorCode: TestErrCodeInvalidSpeakerPath,
 				}
 
-				_ = json.NewEncoder(responseWriter).Encode(errorResp)
+				err := json.NewEncoder(responseWriter).Encode(errorResp)
+				if err != nil {
+					t.Fatalf(
+						"Failed to encode mock error response: %v",
+						err,
+					)
+				}
 			},
 		),
 	)
 	defer server.Close()
 
-	client := NewHTTPClient(server.URL, 10*time.Second)
+	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 
-	req := Request{
-		Text:           testHelloWorld,
+	req := tts.Request{
+		Text:           TestHelloWorld,
 		SpeakerRefPath: "/invalid/path.wav",
 		Temperature:    0.75,
 		Language:       "en",
@@ -190,38 +200,40 @@ func TestHTTPClient_GenerateSpeech_ServiceError(t *testing.T) {
 
 	_, err := client.GenerateSpeech(context.Background(), req)
 	if err == nil {
-		t.Error(testErrExpectedForInvalidSpeaker)
+		t.Error(TestErrExpectedForInvalidSpeaker)
 	}
 
-	if !strings.Contains(err.Error(), testErrMsgInvalidSpeakerPath) {
-		t.Errorf(testErrExpectedSpecificError, err)
+	if !strings.Contains(err.Error(), TestErrMsgInvalidSpeakerPath) {
+		t.Errorf(TestErrExpectedSpecificError, err)
 	}
 
-	if !strings.Contains(err.Error(), testErrCodeInvalidSpeakerPath) {
-		t.Errorf(testErrExpectedErrorCode, err)
+	if !strings.Contains(err.Error(), TestErrCodeInvalidSpeakerPath) {
+		t.Errorf(TestErrExpectedErrorCode, err)
 	}
 }
 
-func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
+func TestClient_GenerateSpeech_WrongContentType(t *testing.T) {
 	t.Parallel()
 	// Mock service that returns wrong content type
 	server := httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, _ *http.Request) {
 				responseWriter.Header().
-					Set(headerContentType, "text/plain")
+					Set("Content-Type", "text/plain")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				_, _ = responseWriter.Write([]byte("Not audio data"))
+				if _, err := responseWriter.Write([]byte("Not audio data")); err != nil {
+					t.Fatalf("Failed to write mock response: %v", err)
+				}
 			},
 		),
 	)
 	defer server.Close()
 
-	client := NewHTTPClient(server.URL, 10*time.Second)
+	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 
-	req := Request{
-		Text:           testHelloWorld,
+	req := tts.Request{
+		Text:           TestHelloWorld,
 		SpeakerRefPath: "",
 		Temperature:    0.75,
 		Language:       "en",
@@ -229,25 +241,25 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 
 	_, err := client.GenerateSpeech(context.Background(), req)
 	if err == nil {
-		t.Error(testErrExpectedForWrongContentType)
+		t.Error(TestErrExpectedForWrongContentType)
 	}
 
 	if !strings.Contains(err.Error(), "unexpected content type") {
-		t.Errorf(testErrExpectedContentTypeError, err)
+		t.Errorf(TestErrExpectedContentTypeError, err)
 	}
 }
 
-func TestHTTPClient_HealthCheck_Success(t *testing.T) {
+func TestClient_HealthCheck_Success(t *testing.T) {
 	t.Parallel()
 
 	server := createHealthyMockServer(t)
 	defer server.Close()
 
-	client := NewHTTPClient(server.URL, 10*time.Second)
+	client := tts.NewHTTPClient(server.URL, 10*time.Second)
 
 	err := client.HealthCheck(context.Background())
 	if err != nil {
-		t.Errorf(testErrHealthCheckFailed, err)
+		t.Errorf(TestErrHealthCheckFailed, err)
 	}
 }
 
@@ -257,7 +269,7 @@ func createHealthyMockServer(t *testing.T) *httptest.Server {
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, request *http.Request) {
 				validateHealthRequest(t, request)
-				writeHealthyResponse(responseWriter)
+				writeHealthyResponse(t, responseWriter)
 			},
 		),
 	)
@@ -265,18 +277,18 @@ func createHealthyMockServer(t *testing.T) *httptest.Server {
 
 // validateHealthRequest validates the incoming health check request.
 func validateHealthRequest(t *testing.T, request *http.Request) {
-	if request.URL.Path != apiHealth {
-		t.Errorf(testErrExpectedHealthPath, request.URL.Path)
+	if request.URL.Path != "/health" {
+		t.Errorf(TestErrExpectedHealthPath, request.URL.Path)
 	}
 
 	if request.Method != http.MethodGet {
-		t.Errorf(testErrExpectedGetRequest, request.Method)
+		t.Errorf(TestErrExpectedGetRequest, request.Method)
 	}
 }
 
 // writeHealthyResponse writes a healthy status response.
-func writeHealthyResponse(responseWriter http.ResponseWriter) {
-	responseWriter.Header().Set(headerContentType, contentTypeJSON)
+func writeHealthyResponse(t *testing.T, responseWriter http.ResponseWriter) {
+	responseWriter.Header().Set("Content-Type", "application/json")
 	responseWriter.WriteHeader(http.StatusOK)
 
 	healthResponse := map[string]any{
@@ -285,21 +297,24 @@ func writeHealthyResponse(responseWriter http.ResponseWriter) {
 		"service":      "TTS",
 	}
 
-	_ = json.NewEncoder(responseWriter).Encode(healthResponse)
-}
-
-func TestHTTPClient_HealthCheck_ServiceDown(t *testing.T) {
-	t.Parallel()
-	// Use a non-existent server URL
-	client := NewHTTPClient("http://localhost:99999", 1*time.Second)
-
-	err := client.HealthCheck(context.Background())
-	if err == nil {
-		t.Error(testErrExpectedForUnreachable)
+	err := json.NewEncoder(responseWriter).Encode(healthResponse)
+	if err != nil {
+		t.Fatalf("Failed to encode healthy response: %v", err)
 	}
 }
 
-func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
+func TestClient_HealthCheck_ServiceDown(t *testing.T) {
+	t.Parallel()
+	// Use a non-existent server URL
+	client := tts.NewHTTPClient("http://localhost:99999", 1*time.Second)
+
+	err := client.HealthCheck(context.Background())
+	if err == nil {
+		t.Error(TestErrExpectedForUnreachable)
+	}
+}
+
+func TestClient_GenerateSpeech_Timeout(t *testing.T) {
 	t.Parallel()
 	// Mock service that takes too long to respond
 	server := httptest.NewServer(
@@ -312,10 +327,10 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 	)
 	defer server.Close()
 
-	client := NewHTTPClient(server.URL, 100*time.Millisecond) // Short timeout
+	client := tts.NewHTTPClient(server.URL, 100*time.Millisecond) // Short timeout
 
-	req := Request{
-		Text:           testHelloWorld,
+	req := tts.Request{
+		Text:           TestHelloWorld,
 		SpeakerRefPath: "",
 		Temperature:    0.75,
 		Language:       "en",
@@ -326,28 +341,6 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 
 	_, err := client.GenerateSpeech(ctx, req)
 	if err == nil {
-		t.Error(testErrExpectedTimeout)
-	}
-}
-
-func TestRequest_Defaults(t *testing.T) {
-	t.Parallel()
-
-	req := Request{
-		Text:           testHelloWorld,
-		SpeakerRefPath: "",
-		Language:       "",
-		Temperature:    0.0,
-	}
-
-	// Test that defaults are applied by the client
-	client := NewHTTPClient("http://localhost:8000", 10*time.Second)
-
-	_ = client // Avoid unused variable
-
-	// We can't actually make the request without a running server,
-	// but we can test the request building logic
-	if req.Text != testHelloWorld {
-		t.Error(testMsgTextShouldBePreserved)
+		t.Error(TestErrExpectedTimeout)
 	}
 }

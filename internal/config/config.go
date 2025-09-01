@@ -15,6 +15,10 @@ import (
 	"github.com/nnikolov3/configurator"
 )
 
+const (
+	dirPermissions = 0o750
+)
+
 // Static errors.
 var (
 	ErrModelPathEmpty   = errors.New("model_path cannot be empty")
@@ -320,7 +324,7 @@ func (c *Config) EnsureDirectories() error {
 	}
 
 	for _, dir := range dirs {
-		err := os.MkdirAll(dir, 0o750)
+		err := os.MkdirAll(dir, dirPermissions)
 		if err != nil {
 			return fmt.Errorf(errFailedToCreateDir, dir, err)
 		}

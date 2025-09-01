@@ -21,7 +21,7 @@ func TestMainFlags(t *testing.T) {
 	// Save original command line args to restore them after the test.
 	oldArgs := os.Args
 
-	defer func() { os.Args = oldArgs }()
+	t.Cleanup(func() { os.Args = oldArgs })
 
 	tests := []struct {
 		name     string
@@ -70,7 +70,7 @@ func TestArgumentValidation(t *testing.T) {
 
 	oldArgs := os.Args
 
-	defer func() { os.Args = oldArgs }()
+	t.Cleanup(func() { os.Args = oldArgs })
 
 	tests := getValidationTestCases()
 
@@ -158,6 +158,8 @@ func validateTestResult(t *testing.T, testCase struct {
 	wantErr       bool
 }, err error,
 ) {
+	t.Helper()
+
 	if testCase.wantErr {
 		validateExpectedError(t, testCase.expectedError, err)
 
@@ -169,6 +171,8 @@ func validateTestResult(t *testing.T, testCase struct {
 
 // validateExpectedError checks that an expected error occurred.
 func validateExpectedError(t *testing.T, expectedError string, err error) {
+	t.Helper()
+
 	if err == nil {
 		t.Errorf("Expected an error but got none")
 
@@ -186,6 +190,8 @@ func validateExpectedError(t *testing.T, expectedError string, err error) {
 
 // validateNoError checks that no error occurred when none was expected.
 func validateNoError(t *testing.T, err error) {
+	t.Helper()
+
 	if err != nil {
 		t.Errorf("Did not expect an error, but got: %v", err)
 	}

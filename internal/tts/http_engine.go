@@ -19,6 +19,10 @@ import (
 const (
 	// HealthCheckTimeout defines the timeout for health check operations.
 	HealthCheckTimeout = 10 * time.Second
+
+	// File and directory permissions.
+	filePermissions = 0o600
+	dirPermissions  = 0o750
 )
 
 // Static errors.
@@ -136,7 +140,7 @@ func (e *HTTPEngine) ProcessSingleChunk(text, outputPath string) error {
 		return genErr
 	}
 
-	writeErr := os.WriteFile(outputPath, audioData, 0o600)
+	writeErr := os.WriteFile(outputPath, audioData, filePermissions)
 	if writeErr != nil {
 		return fmt.Errorf("failed to write audio file: %w", writeErr)
 	}
@@ -173,7 +177,7 @@ func (e *HTTPEngine) prepareChunkProcessing(
 		return nil, fmt.Errorf("failed to read chunks: %w", chunksErr)
 	}
 
-	dirErr := os.MkdirAll(outputDir, 0o750)
+	dirErr := os.MkdirAll(outputDir, dirPermissions)
 	if dirErr != nil {
 		return nil, fmt.Errorf("failed to create output directory: %w", dirErr)
 	}
@@ -208,7 +212,7 @@ func (e *HTTPEngine) validateSingleChunkInputs(text, outputPath string) error {
 func (e *HTTPEngine) prepareSingleChunkOutput(outputPath string) error {
 	outputDir := filepath.Dir(outputPath)
 
-	dirErr := os.MkdirAll(outputDir, 0o750)
+	dirErr := os.MkdirAll(outputDir, dirPermissions)
 	if dirErr != nil {
 		return fmt.Errorf("failed to create output directory: %w", dirErr)
 	}
