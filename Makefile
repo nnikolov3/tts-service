@@ -55,7 +55,9 @@ test-python:
 lint:
 	@echo "Running golangci-lint..."
 	golangci-lint run --fix
-
+lint-python:
+	@echo "Running Python linter..."
+	uvx ruff check .
 # Format Go code
 fmt:
 	@echo "Formatting Go code..."

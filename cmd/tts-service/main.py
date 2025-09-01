@@ -2,8 +2,10 @@
 """
 Standalone FastAPI TTS Service using OuteTTS with llama.cpp backend.
 
-This service provides a decoupled, HTTP-based interface to OuteTTS functionality,
-following the microservice architecture principles defined in the design blueprint.
+This service provides a decoupled, HTTP-based interface to OuteTTS
+functionality,
+following the microservice architecture principles defined in the design
+blueprint.
 The service loads the TTS model once at startup for optimal performance and
 exposes a simple, explicit REST API for text-to-speech generation.
 
@@ -15,13 +17,14 @@ Key design principles implemented:
 - Self-documenting: Clear types and comprehensive error messages
 """
 
+import argparse
 import io
 import logging
 import os
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import outetts
 import uvicorn
@@ -32,13 +35,16 @@ from pydantic import BaseModel, Field, field_validator
 
 # Configure structured logging for service monitoring
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
 # Global TTS interface and speaker instances.
-# These are loaded once at startup to adhere to the "Make the common case fast" principle,
-# eliminating the significant latency of model loading for every individual request.
+# These are loaded once at startup to adhere to the "Make the common case
+# fast" principle,
+# eliminating the significant latency of model loading for every individual
+# request.
 tts_interface: Optional[outetts.Interface] = None
 default_speaker = None
 
@@ -77,7 +83,8 @@ class TTSRequest(BaseModel):
     # Optional server-side ID for voice cloning capabilities
     speaker_id: Optional[str] = Field(
         None,
-        description="A predefined server-side speaker ID for voice cloning (e.g., 'custom-voice-1')",
+        description="A predefined server-side speaker ID for voice cloning "
+        "(e.g., 'custom-voice-1')",
     )
 
     # Generation randomness control parameter
@@ -85,7 +92,8 @@ class TTSRequest(BaseModel):
         0.75,
         ge=0.0,
         le=2.0,
-        description="Generation temperature: 0.0 (deterministic) to 2.0 (highly random)",
+        description="Generation temperature: 0.0 (deterministic) to 2.0 "
+        "(highly random)",
     )
 
     # Target language for speech generation
@@ -118,62 +126,52 @@ class ErrorResponse(BaseModel):
 
 
 # Service Initialization Functions
-# These functions handle the critical startup phase where the TTS model is loaded
-# into memory and configured for optimal performance.
+# These functions handle the critical startup phase where the TTS model is
+# loaded into memory and configured for optimal performance.
 
 
-def initialize_tts_service(model_path: str) -> None:
-    """Initialize the OuteTTS service with specified model and llama.cpp backend.
+def initialize_tts_service(model_path: str) -> tuple[outetts.Interface, Any]:
+    """Initialize the OuteTTS service and return the interface and speaker.
 
     This function performs the heavy lifting of model loading at service startup,
     implementing the "Make the common case fast" principle by avoiding model
-    loading latency on individual requests.
 
     Args:
         model_path: Absolute path to the OuteTTS model file (.gguf format)
 
+    Returns:
+        A tuple containing the initialized OuteTTS interface and default speaker.
+
     Raises:
-        SystemExit: If model loading fails for any reason (file not found,
-                   insufficient memory, unsupported model format, etc.)
-
-    Side Effects:
-        - Sets global tts_interface variable
-        - Sets global default_speaker variable
-        - Logs initialization progress and results
+        SystemExit: If model loading fails for any reason.
     """
-    global tts_interface, default_speaker
-
     try:
         logger.info(f"Loading OuteTTS model from: {model_path}")
 
-        # Validate model file exists before attempting to load
         if not Path(model_path).exists():
             raise FileNotFoundError(f"Model file not found at {model_path}")
 
-        # Configuration for llama.cpp backend with explicit parameters.
-        # These values are chosen for optimal performance and avoid magic numbers.
         model_config = outetts.ModelConfig(
             model_path=model_path,
             backend=outetts.Backend.LLAMACPP,
-            n_gpu_layers=99,  # Offload maximum layers to GPU for performance
-            max_seq_length=8192,  # Standard context length for TTS models
+            n_gpu_layers=99,
+            max_seq_length=8192,
             additional_model_config={
-                "n_ctx": 8192,  # Context window size
-                "n_batch": 512,  # Batch size for processing efficiency
+                "n_ctx": 8192,
+                "n_batch": 512,
             },
         )
 
-        # Initialize TTS interface with configured backend
-        tts_interface = outetts.Interface(config=model_config)
+        interface = outetts.Interface(config=model_config)
         logger.info("OuteTTS interface initialized with llama.cpp backend")
 
-        # Load default speaker to avoid per-request speaker loading overhead
-        default_speaker = tts_interface.load_default_speaker("en-female-1-neutral")
+        speaker = interface.load_default_speaker("en-female-1-neutral")
         logger.info("Default speaker loaded and ready for generation")
+
+        return interface, speaker
 
     except Exception as initialization_error:
         logger.error(f"FATAL: Failed to initialize TTS service: {initialization_error}")
-        # Exit immediately as service cannot function without loaded model
         sys.exit(1)
 
 
@@ -205,6 +203,7 @@ def on_startup() -> None:
     Raises:
         SystemExit: If TTS_MODEL_PATH is not set or model loading fails
     """
+    global tts_interface, default_speaker
     model_path = os.getenv("TTS_MODEL_PATH")
     if not model_path:
         logger.error("FATAL: TTS_MODEL_PATH environment variable not set")
@@ -212,7 +211,7 @@ def on_startup() -> None:
         sys.exit(1)
 
     logger.info("Starting TTS service initialization")
-    initialize_tts_service(model_path)
+    tts_interface, default_speaker = initialize_tts_service(model_path)
     logger.info("TTS service startup completed successfully")
 
 
@@ -221,8 +220,9 @@ async def generate_speech(request: TTSRequest) -> StreamingResponse:
     """Generate speech audio from text input via the primary TTS endpoint.
 
     This endpoint represents the core functionality of the TTS microservice,
-    accepting validated text input and returning WAV audio data. The implementation
-    follows the explicit API contract defined in the service blueprint.
+    accepting validated text input and returning WAV audio data. The
+    implementation follows the explicit API contract defined in the service
+    blueprint.
 
     Args:
         request: Validated TTSRequest containing text and generation parameters
@@ -262,7 +262,8 @@ async def generate_speech(request: TTSRequest) -> StreamingResponse:
                 )
             try:
                 logger.info(
-                    f"Loading custom speaker '{request.speaker_id}' from path: {speaker_path}"
+                    f"Loading custom speaker '{request.speaker_id}' from "
+                    f"path: {speaker_path}"
                 )
                 speaker = await run_in_threadpool(
                     tts_interface.load_speaker, speaker_path
@@ -278,7 +279,8 @@ async def generate_speech(request: TTSRequest) -> StreamingResponse:
         if not speaker:
             logger.error("Speaker not available (default or custom)")
             raise HTTPException(
-                status_code=500, detail="Speaker could not be loaded for generation"
+                status_code=500,
+                detail="Speaker could not be loaded for generation",
             )
 
         # Configure generation parameters with explicit values
@@ -296,7 +298,8 @@ async def generate_speech(request: TTSRequest) -> StreamingResponse:
         )
 
         # --- MODIFIED: Run blocking I/O in a thread pool ---
-        # Generate audio using OuteTTS interface without blocking the event loop
+        # Generate audio using OuteTTS interface without blocking the
+        # event loop
         output = await run_in_threadpool(
             tts_interface.generate, config=generation_config
         )
@@ -313,7 +316,8 @@ async def generate_speech(request: TTSRequest) -> StreamingResponse:
         audio_bytes.seek(0)
 
         logger.info(
-            f"Speech generation completed, audio size: {len(audio_bytes.getvalue())} bytes"
+            f"Speech generation completed, audio size: "
+            f"{len(audio_bytes.getvalue())} bytes"
         )
 
         # Return streaming response with explicit content type
@@ -324,12 +328,14 @@ async def generate_speech(request: TTSRequest) -> StreamingResponse:
         )
 
     except HTTPException:
-        # Re-raise HTTPExceptions to avoid them being caught by the generic Exception handler
+        # Re-raise HTTPExceptions to avoid them being caught by the
+        # generic Exception handler
         raise
     except Exception as generation_error:
         logger.error(f"Speech generation failed: {generation_error}")
         raise HTTPException(
-            status_code=500, detail=f"Speech generation failed: {str(generation_error)}"
+            status_code=500,
+            detail=f"Speech generation failed: {generation_error!s}",
         )
 
 
@@ -338,7 +344,8 @@ async def health_check() -> dict[str, str | bool]:
     """Service health monitoring endpoint for operational readiness checks.
 
     This endpoint provides a lightweight mechanism for external systems
-    to verify that the TTS service is operational and ready to process requests.
+    to verify that the TTS service is operational and ready to process
+    requests.
     It checks both service availability and model loading status.
 
     Returns:
@@ -376,8 +383,6 @@ def main() -> None:
     Environment Variables Set:
         TTS_MODEL_PATH: Set from command line argument for startup handler
     """
-    import argparse
-
     # Configure command-line argument parsing with comprehensive help
     parser = argparse.ArgumentParser(
         description="Standalone TTS Microservice using OuteTTS and llama.cpp",

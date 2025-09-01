@@ -3,7 +3,8 @@
 Optimized OutTTS Engine for Go bindings.
 
 This module provides optimized OutTTS functionality with improved performance,
-better memory management, and updated dependencies to remove deprecation warnings.
+better memory management, and updated dependencies to remove deprecation
+warnings.
 """
 
 import argparse
@@ -24,9 +25,9 @@ try:
     from pydub.playback import play
 
     PYDUB_AVAILABLE = True
-except ImportError as e:
+except ImportError:
     PYDUB_AVAILABLE = False
-    logger.error(f"Pydub not available for audio playback: {e}")
+    # Note: logger not yet defined at this point, will be configured below
 
 # Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -44,10 +45,12 @@ DEFAULT_DAC_DECODING_CHUNK_SMALL = 1536
 DEFAULT_MAX_LENGTH_LARGE = 6144
 DEFAULT_DAC_DECODING_CHUNK_TINY = 1024
 DEFAULT_MAX_LENGTH_HUGE = 4096
+SUPPORTED_BIT_DEPTH_32 = 32
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -210,7 +213,7 @@ class OuteTTSEngine:
                 "temperature": 0.6,
                 "repetition_penalty": 1.05,
             }
-        elif quality == "balanced":
+        if quality == "balanced":
             return {
                 "generation_type": outetts.GenerationType.CHUNKED,
                 "max_batch_size": 12,
@@ -219,15 +222,15 @@ class OuteTTSEngine:
                 "temperature": 0.5,
                 "repetition_penalty": 1.08,
             }
-        else:  # high quality
-            return {
-                "generation_type": outetts.GenerationType.CHUNKED,
-                "max_batch_size": 8,
-                "dac_decoding_chunk": DEFAULT_DAC_DECODING_CHUNK_TINY,
-                "max_length": DEFAULT_MAX_LENGTH_HUGE,
-                "temperature": 0.4,
-                "repetition_penalty": 1.1,
-            }
+        # high quality
+        return {
+            "generation_type": outetts.GenerationType.CHUNKED,
+            "max_batch_size": 8,
+            "dac_decoding_chunk": DEFAULT_DAC_DECODING_CHUNK_TINY,
+            "max_length": DEFAULT_MAX_LENGTH_HUGE,
+            "temperature": 0.4,
+            "repetition_penalty": 1.1,
+        }
 
     def _check_memory_usage(self) -> bool:
         """Check if we have enough GPU memory for processing."""
@@ -265,6 +268,7 @@ class OuteTTSEngine:
             except Exception as e:
                 logger.warning(f"Failed to cleanup GPU memory: {e}")
 
+    # ruff: noqa: PLR0913
     def synthesize(
         self,
         text: str,
@@ -283,6 +287,9 @@ class OuteTTSEngine:
             output_path: Path to save the audio file
             speaker_id: Speaker ID (ignored, uses default speaker)
             language: Language code (ignored, model determines from text)
+            quality: Quality preset for generation
+            temperature: Temperature for generation
+            use_mirostat: Flag to enable mirostat sampling
 
         Returns:
             bool: True if successful, False otherwise
@@ -363,7 +370,10 @@ class OuteTTSEngine:
             Dictionary with playback result
         """
         if not PYDUB_AVAILABLE:
-            return {"success": False, "error": "Pydub not available for audio playback"}
+            return {
+                "success": False,
+                "error": "Pydub not available for audio playback",
+            }
 
         try:
             # Load audio file
@@ -376,7 +386,7 @@ class OuteTTSEngine:
                     audio = audio.set_frame_rate(quality_settings["sample_rate"])
                 if quality_settings.get("channels"):
                     audio = audio.set_channels(quality_settings["channels"])
-                if quality_settings.get("bit_depth") == 32:
+                if quality_settings.get("bit_depth") == SUPPORTED_BIT_DEPTH_32:
                     audio = audio.set_sample_width(4)
 
                 # Apply effects
@@ -430,7 +440,10 @@ class OuteTTSEngine:
             Dictionary with audio file information
         """
         if not PYDUB_AVAILABLE:
-            return {"success": False, "error": "Pydub not available for audio info"}
+            return {
+                "success": False,
+                "error": "Pydub not available for audio info",
+            }
 
         try:
             audio = AudioSegment.from_file(file_path)
@@ -485,7 +498,9 @@ class OuteTTSEngine:
             "outetts_available": OUTETTS_AVAILABLE,
             "torch_available": TORCH_AVAILABLE,
             "model_type": "OutTTS GGUF",
-            "default_speaker": "en-female-1-neutral" if self.default_speaker else None,
+            "default_speaker": (
+                "en-female-1-neutral" if self.default_speaker else None
+            ),
             "memory_usage": memory_info,
         }
 
@@ -497,6 +512,81 @@ def signal_handler(signum, frame):
     if engine_instance:
         engine_instance.cleanup()
     sys.exit(0)
+
+
+def _handle_synthesis_command(engine: "OuteTTSEngine", command: Dict) -> Dict:
+    """Handle a single synthesis job command."""
+    job_data = command["job"]
+    job = SynthesisJob(**job_data)
+    success = engine.synthesize(
+        job.text,
+        job.output_path,
+        quality=job.quality,
+        temperature=job.temperature,
+        use_mirostat=True,
+    )
+    result = SynthesisResult(
+        job_id=job.id, success=success, audio_path=job.output_path
+    )
+    return asdict(result)
+
+
+def _handle_play_audio_command(engine: "OuteTTSEngine", command: Dict) -> Dict:
+    """Handle a play_audio command."""
+    file_path = command.get("file_path")
+    if not file_path:
+        return {"error": "Missing file_path for play_audio command"}
+    quality_settings = command.get("quality_settings", {})
+    return engine.play_audio(file_path, quality_settings)
+
+
+def _handle_audio_info_command(engine: "OuteTTSEngine", command: Dict) -> Dict:
+    """Handle an audio_info command."""
+    file_path = command.get("file_path")
+    if not file_path:
+        return {"error": "Missing file_path for audio_info command"}
+    return engine.get_audio_info(file_path)
+
+
+def _run_persistent_mode(engine: "OuteTTSEngine"):
+    """Run the engine in a loop, processing commands from stdin."""
+    # ruff: noqa: PLW0603
+    global engine_instance
+    engine_instance = engine
+    print("READY", flush=True)
+
+    command_handlers = {
+        "single": _handle_synthesis_command,
+        "play_audio": _handle_play_audio_command,
+        "audio_info": _handle_audio_info_command,
+    }
+
+    for line in sys.stdin:
+        if shutdown_event.is_set():
+            break
+        try:
+            command = json.loads(line.strip())
+            command_type = command.get("type")
+
+            if handler := command_handlers.get(command_type):
+                result = handler(engine, command)
+                print(json.dumps(result), flush=True)
+            elif command_type == "memory_usage":
+                usage = engine.get_model_info()["memory_usage"]
+                print(json.dumps(usage), flush=True)
+            elif command_type == "cleanup":
+                engine._cleanup_memory()
+                print(json.dumps({"status": "cleaned"}), flush=True)
+                break
+            else:
+                print(
+                    json.dumps({"error": f"Unknown command type: {command_type}"}),
+                    flush=True,
+                )
+        except json.JSONDecodeError as e:
+            print(json.dumps({"error": f"Invalid JSON: {e}"}), flush=True)
+        except Exception as e:
+            print(json.dumps({"error": f"Command failed: {e}"}), flush=True)
 
 
 def main():
@@ -532,109 +622,24 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate required arguments for non-info/persistent modes
     if not args.info and not args.persistent:
         if not args.text or not args.output_path:
             parser.error(
                 "text and output_path are required when not using --info or --persistent"
             )
 
-    # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         engine = OuteTTSEngine(args.model_path)
-
         if args.info:
             print(json.dumps(engine.get_model_info(), indent=2))
             return
 
         if args.persistent:
-            # Run in persistent mode for Go integration
-            global engine_instance
-            engine_instance = engine
-            print("READY", flush=True)
-
-            # Read from stdin for commands
-            for line in sys.stdin:
-                if shutdown_event.is_set():
-                    break
-
-                try:
-                    command = json.loads(line.strip())
-                    command_type = command.get("type")
-
-                    if command_type == "single":
-                        job_data = command["job"]
-                        job = SynthesisJob(**job_data)
-                        success = engine.synthesize(
-                            job.text,
-                            job.output_path,
-                            quality=job.quality,
-                            temperature=job.temperature,
-                            use_mirostat=True,
-                        )
-                        result = SynthesisResult(
-                            job_id=job.id, success=success, audio_path=job.output_path
-                        )
-                        print(json.dumps(asdict(result)), flush=True)
-
-                    elif command_type == "memory_usage":
-                        usage = engine.get_model_info()["memory_usage"]
-                        print(json.dumps(usage), flush=True)
-
-                    elif command_type == "play_audio":
-                        file_path = command.get("file_path")
-                        quality_settings = command.get("quality_settings", {})
-                        if file_path:
-                            result = engine.play_audio(file_path, quality_settings)
-                            print(json.dumps(result), flush=True)
-                        else:
-                            print(
-                                json.dumps(
-                                    {
-                                        "error": "Missing file_path for play_audio command"
-                                    }
-                                ),
-                                flush=True,
-                            )
-
-                    elif command_type == "audio_info":
-                        file_path = command.get("file_path")
-                        if file_path:
-                            result = engine.get_audio_info(file_path)
-                            print(json.dumps(result), flush=True)
-                        else:
-                            print(
-                                json.dumps(
-                                    {
-                                        "error": "Missing file_path for audio_info command"
-                                    }
-                                ),
-                                flush=True,
-                            )
-
-                    elif command_type == "cleanup":
-                        engine._cleanup_memory()
-                        print(json.dumps({"status": "cleaned"}), flush=True)
-                        break
-
-                    else:
-                        print(
-                            json.dumps(
-                                {"error": f"Unknown command type: {command_type}"}
-                            ),
-                            flush=True,
-                        )
-
-                except json.JSONDecodeError as e:
-                    print(json.dumps({"error": f"Invalid JSON: {e}"}), flush=True)
-                except Exception as e:
-                    print(json.dumps({"error": f"Command failed: {e}"}), flush=True)
-
+            _run_persistent_mode(engine)
         else:
-            # Regular CLI mode
             success = engine.synthesize(
                 args.text,
                 args.output_path,
@@ -642,13 +647,12 @@ def main():
                 temperature=args.temperature,
                 use_mirostat=args.mirostat,
             )
-
-            if success:
-                print(f"Successfully synthesized: {args.output_path}")
-                print("Model info:", json.dumps(engine.get_model_info(), indent=2))
-            else:
+            if not success:
                 print("Synthesis failed")
                 sys.exit(1)
+
+            print(f"Successfully synthesized: {args.output_path}")
+            print("Model info:", json.dumps(engine.get_model_info(), indent=2))
 
     except Exception as e:
         print(f"Error: {e}")
