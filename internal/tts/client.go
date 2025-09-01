@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -90,7 +91,7 @@ type Request struct {
 
 	// SpeakerRefPath optionally specifies a server-side path to a speaker
 	// reference file for voice cloning. If empty, default speaker is used.
-	SpeakerRefPath string `json:"speaker_ref_path,omitempty"`
+	SpeakerRefPath string `json:"speakerRefPath,omitempty"`
 
 	// Language specifies the target language code (e.g., "en", "es").
 	// Defaults to "en" if not specified.
@@ -108,7 +109,7 @@ type ErrorResponse struct {
 	Detail string `json:"detail"`
 
 	// ErrorCode provides a machine-readable error classification.
-	ErrorCode string `json:"error_code,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 // NewHTTPClient creates and configures an HTTP client for the TTS service.
@@ -150,8 +151,7 @@ func (c *HTTPClient) GenerateSpeech(ctx context.Context, req Request) ([]byte, e
 	defer func() {
 		closeErr := resp.Body.Close()
 		if closeErr != nil {
-			// Log the error but don't fail the operation
-			// This is a common pattern for defer cleanup
+			log.Printf("Warning: failed to close response body: %v", closeErr)
 		}
 	}()
 
@@ -184,8 +184,7 @@ func (c *HTTPClient) HealthCheck(ctx context.Context) error {
 	defer func() {
 		closeErr := resp.Body.Close()
 		if closeErr != nil {
-			// Log the error but don't fail the operation
-			// This is a common pattern for defer cleanup
+			log.Printf("Warning: failed to close response body: %v", closeErr)
 		}
 	}()
 

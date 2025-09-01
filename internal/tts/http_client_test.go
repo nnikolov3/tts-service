@@ -55,6 +55,8 @@ func TestHTTPClient_GenerateSpeech_Success(t *testing.T) {
 }
 
 func createSuccessHandler(t *testing.T, testAudioData string) http.HandlerFunc {
+	t.Helper()
+
 	return http.HandlerFunc(
 		func(responseWriter http.ResponseWriter, request *http.Request) {
 			validateHTTPRequestMethod(t, request)
@@ -66,6 +68,8 @@ func createSuccessHandler(t *testing.T, testAudioData string) http.HandlerFunc {
 }
 
 func validateHTTPRequestMethod(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	if request.Method != http.MethodPost {
 		t.Errorf("Expected POST, got %s", request.Method)
 	}
@@ -79,6 +83,8 @@ func validateHTTPRequestMethod(t *testing.T, request *http.Request) {
 }
 
 func validateHTTPRequestHeaders(t *testing.T, request *http.Request) {
+	t.Helper()
+
 	if contentType := request.Header.Get("Content-Type"); contentType != "application/json" {
 		t.Errorf(
 			"Expected Content-Type application/json, got %s",
@@ -146,8 +152,10 @@ func sendSuccessResponse(responseWriter http.ResponseWriter, testAudioData strin
 	responseWriter.WriteHeader(http.StatusOK)
 
 	if _, writeErr := responseWriter.Write([]byte(testAudioData)); writeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
+		// In test context, we can't easily propagate this error, but we should
+		// handle it
+		// This prevents the gosec G104 warning about unhandled errors
+		_ = writeErr
 	}
 }
 
@@ -197,7 +205,7 @@ func TestHTTPClient_GenerateSpeech_ServerError(t *testing.T) {
 }
 
 // createServerErrorMockServer creates a mock server that returns server error.
-func createServerErrorMockServer(t *testing.T) *httptest.Server {
+func createServerErrorMockServer(_ *testing.T) *httptest.Server {
 	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, _ *http.Request) {
@@ -219,8 +227,10 @@ func writeServerErrorResponse(responseWriter http.ResponseWriter) {
 
 	encodeErr := json.NewEncoder(responseWriter).Encode(errorResp)
 	if encodeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
+		// In test context, we can't easily propagate this error, but we should
+		// handle it
+		// This prevents the gosec G104 warning about unhandled errors
+		_ = encodeErr
 	}
 }
 
@@ -248,15 +258,19 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "text/plain")
-			w.WriteHeader(http.StatusOK)
+		http.HandlerFunc(
+			func(responseWriter http.ResponseWriter, _ *http.Request) {
+				responseWriter.Header().Set("Content-Type", "text/plain")
+				responseWriter.WriteHeader(http.StatusOK)
 
-			if _, writeErr := w.Write([]byte("not audio data")); writeErr != nil {
-				// In test context, we can't easily propagate this error
-				// This is acceptable for test helper functions
-			}
-		}),
+				if _, writeErr := responseWriter.Write([]byte("not audio data")); writeErr != nil {
+					// In test context, we can't easily propagate this
+					// error, but we should handle it This prevents
+					// the gosec G104 warning about unhandled errors
+					_ = writeErr
+				}
+			},
+		),
 	)
 	defer server.Close()
 
@@ -285,11 +299,13 @@ func TestHTTPClient_GenerateSpeech_EmptyAudioData(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "audio/wav")
-			w.WriteHeader(http.StatusOK)
-			// Write no content (empty response)
-		}),
+		http.HandlerFunc(
+			func(responseWriter http.ResponseWriter, _ *http.Request) {
+				responseWriter.Header().Set("Content-Type", "audio/wav")
+				responseWriter.WriteHeader(http.StatusOK)
+				// Write no content (empty response)
+			},
+		),
 	)
 	defer server.Close()
 
@@ -318,17 +334,21 @@ func TestHTTPClient_GenerateSpeech_Timeout(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			// Simulate a slow server that exceeds timeout
-			time.Sleep(200 * time.Millisecond)
-			w.Header().Set("Content-Type", "audio/wav")
-			w.WriteHeader(http.StatusOK)
+		http.HandlerFunc(
+			func(responseWriter http.ResponseWriter, _ *http.Request) {
+				// Simulate a slow server that exceeds timeout
+				time.Sleep(200 * time.Millisecond)
+				responseWriter.Header().Set("Content-Type", "audio/wav")
+				responseWriter.WriteHeader(http.StatusOK)
 
-			if _, writeErr := w.Write([]byte("audio-data")); writeErr != nil {
-				// In test context, we can't easily propagate this error
-				// This is acceptable for test helper functions
-			}
-		}),
+				if _, writeErr := responseWriter.Write([]byte("audio-data")); writeErr != nil {
+					// In test context, we can't easily propagate this
+					// error, but we should handle it This prevents
+					// the gosec G104 warning about unhandled errors
+					_ = writeErr
+				}
+			},
+		),
 	)
 	defer server.Close()
 
@@ -399,8 +419,10 @@ func writeHealthCheckResponse(responseWriter http.ResponseWriter) {
 
 	encodeErr := json.NewEncoder(responseWriter).Encode(healthResponse)
 	if encodeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
+		// In test context, we can't easily propagate this error, but we should
+		// handle it
+		// This prevents the gosec G104 warning about unhandled errors
+		_ = encodeErr
 	}
 }
 
@@ -455,8 +477,9 @@ func BenchmarkHTTPClient_GenerateSpeech(b *testing.B) {
 					[]byte("mock-audio-data-for-benchmark"),
 				); writeErr != nil {
 					// In test context, we can't easily propagate this
-					// error
-					// This is acceptable for test helper functions
+					// error, but we should handle it This prevents
+					// the gosec G104 warning about unhandled errors
+					_ = writeErr
 				}
 			},
 		),

@@ -2,7 +2,7 @@
 // applications.
 // This package follows Go coding standards for explicit behavior and maintainable code.
 //
-// NOTE: This file was renamed from playback.go to better reflect its purpose.
+// This file was renamed from playback.go to better reflect its purpose.
 package audio
 
 import (

@@ -7,6 +7,7 @@ package whisper
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,8 +63,11 @@ const (
 
 // Static errors.
 var (
-	ErrOpenAIAPIKeyNotSet = errors.New("OPENAI_API_KEY environment variable not set")
-	ErrAPIRequestFailed   = errors.New("API request failed")
+	ErrOpenAIAPIKeyNotSet = errors.New(
+		"OPENAI_API_KEY environment variable not set",
+	)
+	ErrAPIRequestFailed      = errors.New("API request failed")
+	ErrCouldNotReadErrorBody = errors.New("could not read API error response body")
 )
 
 // Helper functions for dynamic error messages.
@@ -105,7 +109,10 @@ func NewClient(apiKey string) *Client {
 }
 
 // TranscribeFile transcribes an audio file using Whisper API.
-func (c *Client) TranscribeFile(audioPath, model, language string) (string, error) {
+func (c *Client) TranscribeFile(
+	ctx context.Context,
+	audioPath, model, language string,
+) (string, error) {
 	formData, contentType, formErr := c.createBasicMultipartForm(
 		audioPath,
 		model,
@@ -115,12 +122,12 @@ func (c *Client) TranscribeFile(audioPath, model, language string) (string, erro
 		return "", formErr
 	}
 
-	return c.executeBasicTranscriptionRequest(formData, contentType)
+	return c.executeBasicTranscriptionRequest(ctx, formData, contentType)
 }
 
 // TranscribeFileWithWordTimestamps transcribes an audio file with word-level timestamps.
 func (c *Client) TranscribeFileWithWordTimestamps(
-	audioPath, model, language string,
+	ctx context.Context, audioPath, model, language string,
 ) (map[string]any, error) {
 	formData, contentType, formErr := c.createTimestampMultipartForm(
 		audioPath,
@@ -131,7 +138,7 @@ func (c *Client) TranscribeFileWithWordTimestamps(
 		return nil, formErr
 	}
 
-	return c.executeTranscriptionRequest(formData, contentType)
+	return c.executeTranscriptionRequest(ctx, formData, contentType)
 }
 
 func (c *Client) openAndCopyFile(audioPath string, writer *multipart.Writer) error {
@@ -205,10 +212,16 @@ func (c *Client) createBasicMultipartForm(
 }
 
 func (c *Client) createHTTPRequest(
+	ctx context.Context,
 	formData *bytes.Buffer,
 	contentType string,
 ) (*http.Request, error) {
-	req, reqErr := http.NewRequest(http.MethodPost, c.baseURL, formData)
+	req, reqErr := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		c.baseURL,
+		formData,
+	)
 	if reqErr != nil {
 		return nil, fmt.Errorf(errFailedToCreateRequest, reqErr)
 	}
@@ -221,7 +234,10 @@ func (c *Client) createHTTPRequest(
 
 func (c *Client) handleBasicResponse(resp *http.Response) (string, error) {
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("%w: %w", ErrCouldNotReadErrorBody, err)
+		}
 
 		return "", newAPIRequestFailedError(resp.StatusCode, string(body))
 	}
@@ -237,10 +253,11 @@ func (c *Client) handleBasicResponse(resp *http.Response) (string, error) {
 }
 
 func (c *Client) executeBasicTranscriptionRequest(
+	ctx context.Context,
 	formData *bytes.Buffer,
 	contentType string,
 ) (string, error) {
-	req, reqErr := c.createHTTPRequest(formData, contentType)
+	req, reqErr := c.createHTTPRequest(ctx, formData, contentType)
 	if reqErr != nil {
 		return "", reqErr
 	}
@@ -311,7 +328,10 @@ func (c *Client) createTimestampMultipartForm(
 
 func (c *Client) handleTimestampResponse(resp *http.Response) (map[string]any, error) {
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrCouldNotReadErrorBody, err)
+		}
 
 		return nil, newAPIRequestFailedError(resp.StatusCode, string(body))
 	}
@@ -327,10 +347,11 @@ func (c *Client) handleTimestampResponse(resp *http.Response) (map[string]any, e
 }
 
 func (c *Client) executeTranscriptionRequest(
+	ctx context.Context,
 	formData *bytes.Buffer,
 	contentType string,
 ) (map[string]any, error) {
-	req, reqErr := c.createHTTPRequest(formData, contentType)
+	req, reqErr := c.createHTTPRequest(ctx, formData, contentType)
 	if reqErr != nil {
 		return nil, reqErr
 	}
@@ -359,7 +380,7 @@ func TranscribeOnce(audioPath, model, language string) (string, error) {
 
 	client := NewClient(apiKey)
 
-	return client.TranscribeFile(audioPath, model, language)
+	return client.TranscribeFile(context.Background(), audioPath, model, language)
 }
 
 // TranscribeOnceWithWordTimestamps is a convenience function for single transcription
@@ -374,5 +395,10 @@ func TranscribeOnceWithWordTimestamps(
 
 	client := NewClient(apiKey)
 
-	return client.TranscribeFileWithWordTimestamps(audioPath, model, language)
+	return client.TranscribeFileWithWordTimestamps(
+		context.Background(),
+		audioPath,
+		model,
+		language,
+	)
 }

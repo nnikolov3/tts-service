@@ -88,10 +88,7 @@ func sendMockWAVResponse(responseWriter http.ResponseWriter) {
 	responseWriter.Header().Set(headerContentType, contentTypeWAV)
 	responseWriter.WriteHeader(http.StatusOK)
 
-	if _, writeErr := responseWriter.Write([]byte(testWAVHeaderMinimal)); writeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
-	}
+	_, _ = responseWriter.Write([]byte(testWAVHeaderMinimal))
 }
 
 func createMockTTSHandler(t *testing.T) http.HandlerFunc {
@@ -176,13 +173,7 @@ func TestHTTPClient_GenerateSpeech_ServiceError(t *testing.T) {
 					ErrorCode: testErrCodeInvalidSpeakerPath,
 				}
 
-				encodeErr := json.NewEncoder(responseWriter).
-					Encode(errorResp)
-				if encodeErr != nil {
-					// In test context, we can't easily propagate this
-					// error
-					// This is acceptable for test helper functions
-				}
+				_ = json.NewEncoder(responseWriter).Encode(errorResp)
 			},
 		),
 	)
@@ -221,11 +212,7 @@ func TestHTTPClient_GenerateSpeech_WrongContentType(t *testing.T) {
 					Set(headerContentType, "text/plain")
 				responseWriter.WriteHeader(http.StatusOK)
 
-				if _, writeErr := responseWriter.Write([]byte("Not audio data")); writeErr != nil {
-					// In test context, we can't easily propagate this
-					// error
-					// This is acceptable for test helper functions
-				}
+				_, _ = responseWriter.Write([]byte("Not audio data"))
 			},
 		),
 	)
@@ -298,11 +285,7 @@ func writeHealthyResponse(responseWriter http.ResponseWriter) {
 		"service":      "TTS",
 	}
 
-	encodeErr := json.NewEncoder(responseWriter).Encode(healthResponse)
-	if encodeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
-	}
+	_ = json.NewEncoder(responseWriter).Encode(healthResponse)
 }
 
 func TestHTTPClient_HealthCheck_ServiceDown(t *testing.T) {

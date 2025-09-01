@@ -102,13 +102,12 @@ func TestNewHTTPEngine(t *testing.T) {
 
 	log := createTestLogger(t)
 
-	defer func() {
-		closeErr := log.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	t.Cleanup(func() {
+		err := log.Close()
+		if err != nil {
+			t.Logf("Failed to close logger during cleanup: %v", err)
 		}
-	}()
+	})
 
 	engine := tts.NewHTTPEngine(cfg, log)
 	if engine == nil {
@@ -123,6 +122,8 @@ func TestNewHTTPEngine(t *testing.T) {
 
 // TestHTTPEngine_ProcessSingleChunk_Success verifies successful single chunk processing.
 func TestHTTPEngine_ProcessSingleChunk_Success(t *testing.T) {
+	t.Parallel()
+
 	const testAudioData = "mock-wav-audio-data"
 
 	server := createSingleChunkMockServer(t, testAudioData)
@@ -134,9 +135,7 @@ func TestHTTPEngine_ProcessSingleChunk_Success(t *testing.T) {
 	engine := createTestEngine(t, server.URL, tempDir)
 	defer closeEngine(t, engine)
 
-	testText := "Hello, this is a test."
-
-	err := engine.ProcessSingleChunk(testText, outputPath)
+	err := engine.ProcessSingleChunk("Hello, this is a test.", outputPath)
 	if err != nil {
 		t.Fatalf("ProcessSingleChunk failed: %v", err)
 	}
@@ -167,11 +166,7 @@ func writeHealthResponse(responseWriter http.ResponseWriter) {
 		"model_loaded": true,
 	}
 
-	encodeErr := json.NewEncoder(responseWriter).Encode(healthResponse)
-	if encodeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
-	}
+	_ = json.NewEncoder(responseWriter).Encode(healthResponse)
 }
 
 // writeAudioResponse writes an audio response.
@@ -179,10 +174,7 @@ func writeAudioResponse(responseWriter http.ResponseWriter, audioData string) {
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	if _, writeErr := responseWriter.Write([]byte(audioData)); writeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
-	}
+	_, _ = responseWriter.Write([]byte(audioData))
 }
 
 // createTestEngine creates a test engine with the given server URL and output directory.
@@ -198,17 +190,14 @@ func createTestEngine(t *testing.T, serverURL, tempDir string) *tts.HTTPEngine {
 }
 
 // closeEngine safely closes the engine.
-func closeEngine(t *testing.T, engine *tts.HTTPEngine) {
-	closeErr := engine.Close()
-	if closeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test cleanup
-	}
+func closeEngine(_ *testing.T, engine *tts.HTTPEngine) {
+	_ = engine.Close()
 }
 
 // validateOutputFile validates that the output file was created with correct content.
 func validateOutputFile(t *testing.T, outputPath, expectedContent string) {
-	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+	_, err := os.Stat(outputPath)
+	if os.IsNotExist(err) {
 		t.Fatal("Output file was not created")
 	}
 
@@ -237,8 +226,7 @@ func TestHTTPEngine_ProcessSingleChunk_EmptyText(t *testing.T) {
 	defer func() {
 		closeErr := log.Close()
 		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+			log.Error("Error closing logger: %v", closeErr)
 		}
 	}()
 
@@ -247,8 +235,8 @@ func TestHTTPEngine_ProcessSingleChunk_EmptyText(t *testing.T) {
 	defer func() {
 		closeErr := engine.Close()
 		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+			// Now the logging happens inside the deferred function call.
+			log.Error("Error closing engine: %v", closeErr)
 		}
 	}()
 
@@ -273,8 +261,7 @@ func TestHTTPEngine_ProcessSingleChunk_EmptyOutputPath(t *testing.T) {
 	defer func() {
 		closeErr := log.Close()
 		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+			log.Error("Error closing logger: %v", closeErr)
 		}
 	}()
 
@@ -283,8 +270,8 @@ func TestHTTPEngine_ProcessSingleChunk_EmptyOutputPath(t *testing.T) {
 	defer func() {
 		closeErr := engine.Close()
 		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+			// Now the logging happens inside the deferred function call.
+			log.Error("Error closing engine: %v", closeErr)
 		}
 	}()
 
@@ -299,22 +286,15 @@ func setupMockTTSServer(t *testing.T, testAudioData string) *httptest.Server {
 	responses := map[string]func(w http.ResponseWriter, r *http.Request){
 		"/health": func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-			encodeErr := json.NewEncoder(w).Encode(map[string]any{
+			_ = json.NewEncoder(w).Encode(map[string]any{
 				"status":       "healthy",
 				"model_loaded": true,
 			})
-			if encodeErr != nil {
-				// In test context, we can't easily propagate this error
-				// This is acceptable for test helper functions
-			}
 		},
 		"/v1/generate/speech": func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "audio/wav")
 			w.WriteHeader(http.StatusOK)
-			if _, writeErr := w.Write([]byte(testAudioData)); writeErr != nil {
-				// In test context, we can't easily propagate this error
-				// This is acceptable for test helper functions
-			}
+			_, _ = w.Write([]byte(testAudioData))
 		},
 	}
 
@@ -334,7 +314,10 @@ func createTestChunksFile(t *testing.T, tempDir string) string {
 		t.Fatalf("Failed to marshal test chunks: %v", marshalErr)
 	}
 
-	writeErr := os.WriteFile(chunksPath, chunksData, 0o644)
+	// G306: Expect WriteFile permissions to be 0600 or less.
+	const secureFilePerms = 0o600
+
+	writeErr := os.WriteFile(chunksPath, chunksData, secureFilePerms)
 	if writeErr != nil {
 		t.Fatalf("Failed to write chunks file: %v", writeErr)
 	}
@@ -349,25 +332,23 @@ func setupTestEngine(t *testing.T, serverURL, tempDir string) *tts.HTTPEngine {
 
 	log := createTestLogger(t)
 
-	defer func() {
-		closeErr := log.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	t.Cleanup(func() {
+		err := log.Close()
+		if err != nil {
+			t.Logf("Failed to close logger during cleanup: %v", err)
 		}
-	}()
+	})
 
 	client := tts.NewHTTPClient(serverURL, 30*time.Second)
 
 	engine := tts.NewHTTPEngineWithClient(cfg, log, client)
 
-	defer func() {
-		closeErr := engine.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	t.Cleanup(func() {
+		err := engine.Close()
+		if err != nil {
+			t.Logf("Failed to close engine during cleanup: %v", err)
 		}
-	}()
+	})
 
 	return engine
 }
@@ -400,7 +381,9 @@ func TestHTTPEngine_ProcessChunks_Success(t *testing.T) {
 
 	for _, filename := range expectedFiles {
 		outputPath := filepath.Join(outputDir, filename)
-		if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+
+		_, err := os.Stat(outputPath)
+		if os.IsNotExist(err) {
 			t.Errorf("Expected output file %s was not created", filename)
 		}
 	}
@@ -415,23 +398,21 @@ func TestHTTPEngine_ProcessChunks_InvalidChunksFile(t *testing.T) {
 
 	log := createTestLogger(t)
 
-	defer func() {
-		closeErr := log.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	t.Cleanup(func() {
+		err := log.Close()
+		if err != nil {
+			t.Logf("Failed to close logger during cleanup: %v", err)
 		}
-	}()
+	})
 
 	engine := tts.NewHTTPEngine(cfg, log)
 
-	defer func() {
-		closeErr := engine.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	t.Cleanup(func() {
+		err := engine.Close()
+		if err != nil {
+			t.Logf("Failed to close engine during cleanup: %v", err)
 		}
-	}()
+	})
 
 	tempDir := t.TempDir()
 	outputDir := filepath.Join(tempDir, "output")
@@ -465,7 +446,7 @@ func TestHTTPEngine_ProcessChunks_ServiceUnavailable(t *testing.T) {
 }
 
 // createUnavailableMockServer creates a mock server that returns service unavailable.
-func createUnavailableMockServer(t *testing.T) *httptest.Server {
+func createUnavailableMockServer(_ *testing.T) *httptest.Server {
 	return httptest.NewServer(
 		http.HandlerFunc(
 			func(responseWriter http.ResponseWriter, _ *http.Request) {
@@ -514,11 +495,7 @@ func writeBenchmarkHealthResponse(responseWriter http.ResponseWriter) {
 		"model_loaded": true,
 	}
 
-	encodeErr := json.NewEncoder(responseWriter).Encode(healthResponse)
-	if encodeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
-	}
+	_ = json.NewEncoder(responseWriter).Encode(healthResponse)
 }
 
 // writeBenchmarkAudioResponse writes an audio response for benchmarks.
@@ -526,13 +503,12 @@ func writeBenchmarkAudioResponse(responseWriter http.ResponseWriter) {
 	responseWriter.Header().Set("Content-Type", "audio/wav")
 	responseWriter.WriteHeader(http.StatusOK)
 
-	if _, writeErr := responseWriter.Write([]byte("benchmark-audio-data")); writeErr != nil {
-		// In test context, we can't easily propagate this error
-		// This is acceptable for test helper functions
-	}
+	_, _ = responseWriter.Write([]byte("benchmark-audio-data"))
 }
 
 func setupBenchmarkEngine(b *testing.B, serverURL, tempDir string) *tts.HTTPEngine {
+	b.Helper()
+
 	cfg := createTestConfig(serverURL)
 
 	cfg.Paths.OutputDir = tempDir
@@ -542,23 +518,21 @@ func setupBenchmarkEngine(b *testing.B, serverURL, tempDir string) *tts.HTTPEngi
 		b.Fatalf("Failed to create logger: %v", loggerErr)
 	}
 
-	defer func() {
-		closeErr := log.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	b.Cleanup(func() {
+		err := log.Close()
+		if err != nil {
+			b.Logf("Failed to close logger during cleanup: %v", err)
 		}
-	}()
+	})
 
 	engine := tts.NewHTTPEngine(cfg, log)
 
-	defer func() {
-		closeErr := engine.Close()
-		if closeErr != nil {
-			// In test context, we can't easily propagate this error
-			// This is acceptable for test cleanup
+	b.Cleanup(func() {
+		err := engine.Close()
+		if err != nil {
+			b.Logf("Failed to close engine during cleanup: %v", err)
 		}
-	}()
+	})
 
 	return engine
 }

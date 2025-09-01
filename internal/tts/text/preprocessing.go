@@ -37,7 +37,7 @@ const (
 	whitespaceRegexPattern = `\s+`
 )
 
-// Placeholder patterns for preserving URLs and emails.
+// Patterns for preserving URLs and emails.
 const (
 	urlPlaceholderPattern   = `__URL_PLACEHOLDER_%d__`
 	emailPlaceholderPattern = `__EMAIL_PLACEHOLDER_%d__`
