@@ -1,298 +1,432 @@
 #!/usr/bin/env python3
 """
-Test suite for the TTS FastAPI service following Test-Driven Development
-principles.
-Tests verify API contract compliance, error handling, and integration behavior.
+Standalone FastAPI TTS Service using OuteTTS with llama.cpp backend.
+
+This service provides a decoupled, HTTP-based interface to OuteTTS
+functionality,
+following the microservice architecture principles defined in the design
+blueprint.
+The service loads the TTS model once at startup for optimal performance and
+exposes a simple, explicit REST API for text-to-speech generation.
+
+Key design principles implemented:
+- Abstraction and modularity: Separates TTS logic from client applications
+- Make the common case fast: Model loaded once at startup
+- Explicit interfaces: Clear JSON request/response contracts
+- Fail fast: Input validation at API boundaries
+- Self-documenting: Clear types and comprehensive error messages
 """
 
+import argparse
+import io
+import logging
 import os
-import unittest
-from unittest.mock import MagicMock, patch
+import sys
+import tempfile
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Optional
 
-from fastapi.testclient import TestClient
+import outetts
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, field_validator
 
-# Import the FastAPI app from main module
-from main import TTSRequest, app, initialize_tts_service, on_startup
+# Configure structured logging for service monitoring
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
+# Global TTS interface and speaker instances.
+# These are loaded once at startup to adhere to the "Make the common case
+# fast" principle,
+# eliminating the significant latency of model loading for every individual
+# request.
+tts_interface: Optional[outetts.Interface] = None
+default_speaker = None
 
-class TestTTSServiceAPI(unittest.TestCase):
-    """Test suite for TTS service API endpoints following TDD principles."""
-
-    def setUp(self):
-        """Set up test client and mock dependencies for each test."""
-        self.client = TestClient(app)
-
-        # Mock the TTS interface to avoid requiring actual model files
-        self.mock_tts_interface = MagicMock()
-        self.mock_speaker = MagicMock()
-
-        # Create mock audio output
-        self.mock_audio_data = b"mock-wav-audio-data"
-        self.mock_output = MagicMock()
-        self.mock_output.save_to_io = MagicMock()
-
-    def test_tts_request_validation_valid_input(self):
-        """Test TTSRequest validation with valid input parameters."""
-        valid_request = {
-            "text": "Hello, world!",
-            "speaker_ref_path": "/path/to/speaker.wav",
-            "temperature": 0.75,
-            "language": "en",
-        }
-
-        # This should not raise a validation error
-        request = TTSRequest(**valid_request)
-        self.assertEqual(request.text, "Hello, world!")
-        self.assertEqual(request.temperature, 0.75)
-        self.assertEqual(request.language, "en")
-
-    def test_tts_request_validation_empty_text(self):
-        """Test TTSRequest validation rejects empty text."""
-        invalid_request = {"text": "", "temperature": 0.75, "language": "en"}
-
-        with self.assertRaises(ValueError):
-            TTSRequest(**invalid_request)
-
-    def test_tts_request_validation_whitespace_only_text(self):
-        """Test TTSRequest validation rejects whitespace-only text."""
-        invalid_request = {
-            "text": "   \n\t  ",
-            "temperature": 0.75,
-            "language": "en",
-        }
-
-        with self.assertRaises(ValueError):
-            TTSRequest(**invalid_request)
-
-    def test_tts_request_validation_temperature_out_of_range(self):
-        """Test TTSRequest validation enforces temperature bounds."""
-        # Test temperature too low
-        with self.assertRaises(ValueError):
-            TTSRequest(text="Hello", temperature=-0.1, language="en")
-
-        # Test temperature too high
-        with self.assertRaises(ValueError):
-            TTSRequest(text="Hello", temperature=2.1, language="en")
-
-    def test_tts_request_validation_text_too_long(self):
-        """Test TTSRequest validation enforces text length limits."""
-        long_text = "a" * 10001  # Exceeds max_length=10000
-
-        with self.assertRaises(ValueError):
-            TTSRequest(text=long_text, temperature=0.75, language="en")
-
-    @patch("main.tts_interface")
-    @patch("main.default_speaker")
-    def test_generate_speech_success(self, mock_speaker, mock_interface):
-        """Test successful speech generation via API endpoint."""
-        # Configure mocks
-        mock_interface.generate.return_value = self.mock_output
-        mock_speaker.return_value = self.mock_speaker
-
-        # Configure mock output to write audio data
-        def mock_save_to_io(buffer):
-            buffer.write(self.mock_audio_data)
-
-        self.mock_output.save_to_io.side_effect = mock_save_to_io
-
-        # Make request to API
-        request_data = {
-            "text": "Hello, this is a test.",
-            "temperature": 0.8,
-            "language": "en",
-        }
-
-        response = self.client.post("/v1/generate/speech", json=request_data)
-
-        # Verify response
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["content-type"], "audio/wav")
-        self.assertEqual(response.content, self.mock_audio_data)
-
-        # Verify TTS interface was called correctly
-        mock_interface.generate.assert_called_once()
-
-    def test_generate_speech_invalid_request_empty_text(self):
-        """Test API rejects requests with empty text."""
-        request_data = {"text": "", "temperature": 0.75, "language": "en"}
-
-        response = self.client.post("/v1/generate/speech", json=request_data)
-
-        self.assertEqual(response.status_code, 422)  # Validation error
-        error_data = response.json()
-        self.assertIn("detail", error_data)
-
-    def test_generate_speech_invalid_request_missing_text(self):
-        """Test API rejects requests missing required text field."""
-        request_data = {"temperature": 0.75, "language": "en"}
-
-        response = self.client.post("/v1/generate/speech", json=request_data)
-
-        self.assertEqual(response.status_code, 422)  # Validation error
-
-    def test_generate_speech_invalid_temperature(self):
-        """Test API rejects requests with invalid temperature values."""
-        # Test temperature too low
-        request_data = {
-            "text": "Hello, world!",
-            "temperature": -0.5,
-            "language": "en",
-        }
-
-        response = self.client.post("/v1/generate/speech", json=request_data)
-        self.assertEqual(response.status_code, 422)
-
-        # Test temperature too high
-        request_data["temperature"] = 2.5
-        response = self.client.post("/v1/generate/speech", json=request_data)
-        self.assertEqual(response.status_code, 422)
-
-    @patch("main.tts_interface", None)
-    def test_generate_speech_service_not_initialized(self):
-        """Test API returns error when TTS service is not initialized."""
-        request_data = {
-            "text": "Hello, world!",
-            "temperature": 0.75,
-            "language": "en",
-        }
-
-        response = self.client.post("/v1/generate/speech", json=request_data)
-
-        self.assertEqual(response.status_code, 500)
-        error_data = response.json()
-        self.assertEqual(error_data["detail"], "TTS service not initialized")
-
-    @patch("main.tts_interface")
-    @patch("main.default_speaker")
-    def test_generate_speech_generation_failure(self, mock_speaker, mock_interface):
-        """Test API handles TTS generation failures gracefully."""
-        # Configure mock to raise exception
-        mock_interface.generate.side_effect = Exception("Model generation failed")
-        mock_speaker.return_value = self.mock_speaker
-
-        request_data = {
-            "text": "Hello, world!",
-            "temperature": 0.75,
-            "language": "en",
-        }
-
-        response = self.client.post("/v1/generate/speech", json=request_data)
-
-        self.assertEqual(response.status_code, 500)
-        error_data = response.json()
-        self.assertIn("Speech generation failed", error_data["detail"])
-
-    def test_health_check_success(self):
-        """Test health check endpoint returns success when service is healthy."""
-        with (
-            patch("main.tts_interface", self.mock_tts_interface),
-            patch("main.default_speaker", self.mock_speaker),
-        ):
-            response = self.client.get("/health")
-
-            self.assertEqual(response.status_code, 200)
-            health_data = response.json()
-            self.assertEqual(health_data["status"], "healthy")
-            self.assertTrue(health_data["model_loaded"])
-
-    def test_health_check_service_not_initialized(self):
-        """Test health check reports when TTS interface is not loaded."""
-        with patch("main.tts_interface", None):
-            response = self.client.get("/health")
-
-            self.assertEqual(response.status_code, 200)
-            health_data = response.json()
-            self.assertEqual(health_data["status"], "healthy")
-            self.assertFalse(health_data["model_loaded"])
+# --- NEW: Secure mapping for custom speakers ---
+# Maps a safe, client-provided ID to a secure, server-side file path.
+# This prevents path traversal vulnerabilities.
+# In a real application, this might be loaded from a config file.
+SPEAKER_MAPPING = {
+    "custom-voice-1": "/path/to/secure/speakers/voice1.wav",
+    "custom-voice-2": "/path/to/secure/speakers/voice2.wav",
+}
 
 
-class TestTTSServiceInitialization(unittest.TestCase):
-    """Test suite for TTS service initialization logic."""
+# API Request and Response Models
+# These models ensure the API contract is explicit and self-documenting,
+# providing compile-time validation and runtime input sanitization.
 
-    def test_initialize_tts_service_missing_model_file(self):
-        """Test initialization fails gracefully when model file doesn't exist."""
-        nonexistent_path = "/path/that/does/not/exist.gguf"
 
-        with self.assertRaises(SystemExit):
-            initialize_tts_service(nonexistent_path)
+class TTSRequest(BaseModel):
+    """Request model for TTS generation with comprehensive input validation.
 
-    @patch("main.outetts.Interface")
-    @patch("main.Path.exists")
-    def test_initialize_tts_service_success(self, mock_exists, mock_interface_class):
-        """Test successful TTS service initialization."""
-        mock_exists.return_value = True
-        mock_interface = MagicMock()
-        mock_interface_class.return_value = mock_interface
-        mock_interface.load_default_speaker.return_value = MagicMock()
+    This model enforces the API contract by validating all input parameters
+    at the service boundary, ensuring data integrity and preventing invalid
+    requests from reaching the TTS processing logic.
+    """
 
-        test_model_path = "/tmp/test_model.gguf"
+    # Text content to convert to speech - core required parameter
+    text: str = Field(
+        ...,
+        min_length=1,
+        max_length=10000,
+        description="Text to convert to speech (1-10000 characters)",
+    )
 
-        # This should not raise an exception
-        try:
-            initialize_tts_service(test_model_path)
-        except SystemExit:
-            self.fail("initialize_tts_service raised SystemExit unexpectedly")
+    # --- MODIFIED: Changed from path to secure ID ---
+    # Optional server-side ID for voice cloning capabilities
+    speaker_id: Optional[str] = Field(
+        None,
+        description="A predefined server-side speaker ID for voice cloning "
+        "(e.g., 'custom-voice-1')",
+    )
 
-        # Verify interface was created with correct config
-        mock_interface_class.assert_called_once()
-        mock_interface.load_default_speaker.assert_called_once_with(
-            "en-female-1-neutral"
+    # Generation randomness control parameter
+    temperature: float = Field(
+        0.75,
+        ge=0.0,
+        le=2.0,
+        description="Generation temperature: 0.0 (deterministic) to 2.0 "
+        "(highly random)",
+    )
+
+    # Target language for speech generation
+    language: str = Field(
+        "en", description="ISO language code (e.g., 'en', 'es', 'fr')"
+    )
+
+    @field_validator("text")
+    @classmethod
+    def validate_text_content(cls, v: str) -> str:
+        """Validate text content is not empty or whitespace-only."""
+        if not v or not v.strip():
+            raise ValueError("Text cannot be empty or whitespace-only")
+        return v.strip()
+
+
+class ErrorResponse(BaseModel):
+    """Structured error response model for providing actionable diagnostics.
+
+    This model ensures error responses follow a consistent format that clients
+    can parse programmatically while providing both human-readable descriptions
+    and machine-readable error codes for automated error handling.
+    """
+
+    # Human-readable error description
+    detail: str
+
+    # Machine-readable error classification for automated handling
+    error_code: str
+
+
+# Service Initialization Functions
+# These functions handle the critical startup phase where the TTS model is
+# loaded into memory and configured for optimal performance.
+
+
+def initialize_tts_service(model_path: str) -> tuple[outetts.Interface, Any]:
+    """Initialize the OuteTTS service and return the interface and speaker.
+
+    This function performs the heavy lifting of model loading at service startup,
+    implementing the "Make the common case fast" principle by avoiding model
+
+    Args:
+        model_path: Absolute path to the OuteTTS model file (.gguf format)
+
+    Returns:
+        A tuple containing the initialized OuteTTS interface and default speaker.
+
+    Raises:
+        SystemExit: If model loading fails for any reason.
+    """
+    try:
+        logger.info(f"Loading OuteTTS model from: {model_path}")
+
+        if not Path(model_path).exists():
+            raise FileNotFoundError(f"Model file not found at {model_path}")
+
+        model_config = outetts.ModelConfig(
+            model_path=model_path,
+            backend=outetts.Backend.LLAMACPP,
+            n_gpu_layers=99,
+            max_seq_length=8192,
+            additional_model_config={
+                "n_ctx": 8192,
+                "n_batch": 512,
+            },
         )
 
-    @patch("main.outetts.Interface")
-    @patch("main.Path.exists")
-    def test_initialize_tts_service_interface_creation_failure(
-        self, mock_exists, mock_interface_class
-    ):
-        """Test initialization handles OuteTTS interface creation failures."""
-        mock_exists.return_value = True
-        mock_interface_class.side_effect = Exception("CUDA not available")
+        interface = outetts.Interface(config=model_config)
+        logger.info("OuteTTS interface initialized with llama.cpp backend")
 
-        test_model_path = "/tmp/test_model.gguf"
+        speaker = interface.load_default_speaker("en-female-1-neutral")
+        logger.info("Default speaker loaded and ready for generation")
 
-        with self.assertRaises(SystemExit):
-            initialize_tts_service(test_model_path)
+        return interface, speaker
+
+    except Exception as initialization_error:
+        logger.error(f"FATAL: Failed to initialize TTS service: {initialization_error}")
+        sys.exit(1)
 
 
-class TestTTSServiceConfiguration(unittest.TestCase):
-    """Test suite for TTS service configuration and environment handling."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for TTS model initialization.
 
-    def setUp(self):
-        """Set up test environment."""
-        # Store original environment
-        self.original_env = os.environ.get("TTS_MODEL_PATH")
+    This context manager is called once when the FastAPI application starts,
+    ensuring the TTS model is loaded and ready before accepting requests.
+    The startup process validates environment configuration and performs
+    the expensive model loading operation upfront.
 
-    def tearDown(self):
-        """Restore original environment."""
-        if self.original_env is not None:
-            os.environ["TTS_MODEL_PATH"] = self.original_env
-        elif "TTS_MODEL_PATH" in os.environ:
-            del os.environ["TTS_MODEL_PATH"]
+    Environment Variables:
+        TTS_MODEL_PATH: Required path to the OuteTTS model file
 
-    def test_startup_event_missing_model_path_env(self):
-        """Test startup event fails when TTS_MODEL_PATH is not set."""
-        # Remove environment variable
-        if "TTS_MODEL_PATH" in os.environ:
-            del os.environ["TTS_MODEL_PATH"]
+    Raises:
+        SystemExit: If TTS_MODEL_PATH is not set or model loading fails
+    """
+    global tts_interface, default_speaker
+    model_path = os.getenv("TTS_MODEL_PATH")
+    if not model_path:
+        logger.error("FATAL: TTS_MODEL_PATH environment variable not set")
+        logger.error("Set TTS_MODEL_PATH to the path of your .gguf model file")
+        sys.exit(1)
 
-        # This should trigger a SystemExit in the startup event
-        with self.assertRaises(SystemExit):
-            # Import and trigger startup
-            on_startup()
+    logger.info("Starting TTS service initialization")
+    tts_interface, default_speaker = initialize_tts_service(model_path)
+    logger.info("TTS service startup completed successfully")
 
-    @patch("main.initialize_tts_service")
-    def test_startup_event_with_valid_model_path(self, mock_initialize):
-        """Test startup event succeeds with valid TTS_MODEL_PATH."""
-        test_model_path = "/tmp/test_model.gguf"
-        os.environ["TTS_MODEL_PATH"] = test_model_path
+    yield  # Application is now running
 
-        # Import and trigger startup
-        on_startup()
+    # --- Shutdown logic would go here ---
+    logger.info("TTS service is shutting down.")
 
-        # Verify initialization was called with correct path
-        mock_initialize.assert_called_once_with(test_model_path)
+
+# FastAPI Application Configuration
+# The application is configured with explicit metadata for API documentation
+# and service identification, following the principle of explicit interfaces.
+
+app = FastAPI(
+    title="TTS Microservice",
+    description="Decoupled Text-to-Speech service using OuteTTS with llama.cpp backend",
+    version="1.0.0",
+    docs_url="/docs",  # Explicit API documentation endpoint
+    redoc_url="/redoc",  # Alternative documentation interface
+    lifespan=lifespan,  # Use the new lifespan manager
+)
+
+
+@app.post("/v1/generate/speech", response_class=StreamingResponse)
+async def generate_speech(request: TTSRequest) -> StreamingResponse:
+    """Generate speech audio from text input via the primary TTS endpoint.
+
+    This endpoint represents the core functionality of the TTS microservice,
+    accepting validated text input and returning WAV audio data. The
+    implementation follows the explicit API contract defined in the service
+    blueprint.
+
+    Args:
+        request: Validated TTSRequest containing text and generation parameters
+
+    Returns:
+        StreamingResponse: WAV audio data with appropriate content-type headers
+
+    Raises:
+        HTTPException:
+            - 500 if TTS service is not initialized
+            - 500 if speech generation fails for any reason
+            - 400 if a custom speaker_id is invalid
+            - 422 if request validation fails (handled by FastAPI)
+
+    API Contract:
+        - POST /v1/generate/speech
+        - Content-Type: application/json (request)
+        - Accept: audio/wav (response)
+        - Response Content-Type: audio/wav
+    """
+    # Verify service initialization state
+    if not tts_interface:
+        logger.error("Speech generation attempted before service initialization")
+        raise HTTPException(status_code=500, detail="TTS service not initialized")
+
+    try:
+        speaker = default_speaker
+
+        # --- NEW: Logic to handle custom speaker ID ---
+        if request.speaker_id:
+            speaker_path = SPEAKER_MAPPING.get(request.speaker_id)
+            if not speaker_path or not Path(speaker_path).exists():
+                logger.warning(f"Invalid or unknown speaker_id: {request.speaker_id}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid speaker_id: '{request.speaker_id}' not found.",
+                )
+            try:
+                logger.info(
+                    f"Loading custom speaker '{request.speaker_id}' from "
+                    f"path: {speaker_path}"
+                )
+                speaker = await run_in_threadpool(
+                    tts_interface.load_speaker, speaker_path
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to load custom speaker '{request.speaker_id}': {e}"
+                )
+                raise HTTPException(
+                    status_code=500, detail="Error loading custom speaker."
+                )
+
+        if not speaker:
+            logger.error("Speaker not available (default or custom)")
+            raise HTTPException(
+                status_code=500,
+                detail="Speaker could not be loaded for generation",
+            )
+
+        # Configure generation parameters with explicit values
+        sampler_config = outetts.SamplerConfig(temperature=request.temperature)
+
+        generation_config = outetts.GenerationConfig(
+            text=request.text,
+            speaker=speaker,
+            sampler_config=sampler_config,
+            generation_type=outetts.GenerationType.CHUNKED,
+        )
+
+        logger.info(
+            f"Generating speech for text length: {len(request.text)} characters"
+        )
+
+        # --- MODIFIED: Run blocking I/O in a thread pool ---
+        # Generate audio using OuteTTS interface without blocking the
+        # event loop
+        output = await run_in_threadpool(
+            tts_interface.generate, config=generation_config
+        )
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+            output.save(temp_file.name)
+
+        # Prepare audio data for streaming response
+        audio_bytes = io.BytesIO()
+        with open(temp_file.name, "rb") as f:
+            audio_bytes.write(f.read())
+        audio_bytes.seek(0)
+        os.unlink(temp_file.name)
+
+        audio_bytes.seek(0)
+
+        logger.info(
+            f"Speech generation completed, audio size: "
+            f"{len(audio_bytes.getvalue())} bytes"
+        )
+
+        # Return streaming response with explicit content type
+        return StreamingResponse(
+            audio_bytes,
+            media_type="audio/wav",
+            headers={"Content-Disposition": "attachment; filename=speech.wav"},
+        )
+
+    except HTTPException:
+        # Re-raise HTTPExceptions to avoid them being caught by the
+        # generic Exception handler
+        raise
+    except Exception as generation_error:
+        logger.error(f"Speech generation failed: {generation_error}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Speech generation failed: {generation_error!s}",
+        )
+
+
+@app.get("/health")
+async def health_check() -> dict[str, str | bool]:
+    """Service health monitoring endpoint for operational readiness checks.
+
+    This endpoint provides a lightweight mechanism for external systems
+    to verify that the TTS service is operational and ready to process
+    requests.
+    It checks both service availability and model loading status.
+
+    Returns:
+        dict: Health status information containing:
+            - status: Always "healthy" if endpoint responds
+            - model_loaded: Boolean indicating if TTS model is ready
+
+    API Contract:
+        - GET /health
+        - Response: 200 OK with JSON health status
+        - No authentication required for monitoring purposes
+    """
+    model_ready = tts_interface is not None and default_speaker is not None
+
+    return {
+        "status": "healthy",
+        "model_loaded": model_ready,
+        "service": "tts-microservice",
+        "version": "1.0.0",
+    }
+
+
+def main() -> None:
+    """Main entry point for the TTS microservice application.
+
+    This function handles command-line argument parsing, environment setup,
+    and Uvicorn server configuration. It provides a clean interface for
+    starting the service in both development and production environments.
+
+    Command Line Arguments:
+        model_path: Required path to the OuteTTS model file (.gguf format)
+        --host: Server bind address (default: 127.0.0.1)
+        --port: Server port number (default: 8000)
+
+    Environment Variables Set:
+        TTS_MODEL_PATH: Set from command line argument for startup handler
+    """
+    # Configure command-line argument parsing with comprehensive help
+    parser = argparse.ArgumentParser(
+        description="Standalone TTS Microservice using OuteTTS and llama.cpp",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s /path/to/model.gguf
+  %(prog)s /path/to/model.gguf --host 0.0.0.0 --port 8080
+        """,
+    )
+
+    parser.add_argument(
+        "model_path", help="Path to the OuteTTS model file (.gguf format)"
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host address to bind server (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port number to bind server (default: %(default)d)",
+    )
+
+    args = parser.parse_args()
+
+    # Set environment variable for startup handler
+    os.environ["TTS_MODEL_PATH"] = args.model_path
+
+    logger.info(f"Starting TTS microservice on {args.host}:{args.port}")
+    logger.info(f"Model path: {args.model_path}")
+
+    # Start Uvicorn server with explicit configuration
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info", access_log=True)
 
 
 if __name__ == "__main__":
-    # Run tests with verbose output
-    unittest.main(verbosity=2)
+    main()

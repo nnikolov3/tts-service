@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// Test constants, updated to follow CamelCase convention.
+// Test constants, updated to match the lowercase error strings in main.go.
 const (
 	TestExpectedTextFlag      = "Expected text flag %q, got %q"
-	TestErrEitherTextOrChunks = "Either --text or --chunks must be provided"
-	TestErrCannotSpecifyBoth  = "Cannot specify both --text and --chunks"
+	TestErrEitherTextOrChunks = "either --text or --chunks must be provided"
+	TestErrCannotSpecifyBoth  = "cannot specify both --text and --chunks"
 )
 
 // TestMainFlags verifies that command-line flags are parsed correctly.
