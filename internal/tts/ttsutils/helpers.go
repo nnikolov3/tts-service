@@ -1,42 +1,41 @@
-// Package fileutil provides file and path utility functions for applications.
+// Package ttsutils provides file and path utility functions for applications.
 //
 // This package focuses on platform-agnostic ways to handle application paths,
 // format data for display, and sanitize filenames, adhering to Go's best practices
 // for clarity, error handling, and maintainability.
-package fileutil
+package ttsutils
 
 import (
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
 // Environment variable names used for path resolution.
 const (
-	envCacheDir     = "CACHE_DIR"
-	envAppData      = "APPDATA"
-	envTemp         = "TEMP"
-	envXDGCacheHome = "XDG_CACHE_HOME"
-)
-
-// OS-specific constants.
-const (
-	osWindows = "windows"
-	osDarwin  = "darwin"
+	envCacheDir = "CACHE_DIR"
 )
 
 // Common application directory and path constants.
 const (
-	appName               = "book-expert"
-	cacheDirName          = "cache"
-	modelsDirName         = "models"
-	tmpDir                = "/tmp"
-	libraryCaches         = "Library/Caches"
-	dotCache              = ".cache"
-	defaultDirPermissions = 0o750
+	appName                = "tts-service"
+	cacheDirName           = "cache"
+	modelsDirName          = "models"
+	tmpDir                 = "/tmp"
+	dotCache               = ".cache"
+	defaultDirPermissions  = 0o750
+	dot                    = "."
+	invalidCharReplacement = "_"
+)
+
+// Data size constants.
+const (
+	byteUnit = 1
+	kilobyte = byteUnit * 1024
+	megabyte = kilobyte * 1024
+	gigabyte = megabyte * 1024
 )
 
 // Time and size formatting constants.
@@ -80,32 +79,15 @@ const (
 // ErrModelNotFound is returned when a model file cannot be located.
 var ErrModelNotFound = errors.New(errModelNotFoundMsg)
 
-// getWindowsCacheDir determines the cache directory on Windows.
-func getWindowsCacheDir() string {
-	if appData := os.Getenv(envAppData); appData != "" {
-		return filepath.Join(appData, appName, cacheDirName)
-	}
-	// Fallback to TEMP directory.
-	return filepath.Join(os.Getenv(envTemp), appName, cacheDirName)
-}
-
-// getDarwinCacheDir determines the cache directory on macOS.
-func getDarwinCacheDir() string {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		// Fallback to a temporary directory if home cannot be determined.
-		return filepath.Join(tmpDir, appName, cacheDirName)
+// GetCacheDir returns the application's cache directory, respecting an environment
+// variable override and falling back to a standard user-based cache directory.
+func GetCacheDir() string {
+	// Honor the user-defined CACHE_DIR if it's set.
+	if cacheDir := os.Getenv(envCacheDir); cacheDir != "" {
+		return cacheDir
 	}
 
-	return filepath.Join(homeDir, libraryCaches, appName)
-}
-
-// getUnixCacheDir determines the cache directory on Linux and other Unix-like systems.
-func getUnixCacheDir() string {
-	if xdgCache := os.Getenv(envXDGCacheHome); xdgCache != "" {
-		return filepath.Join(xdgCache, appName)
-	}
-
+	// Default to a .cache directory in the user's home.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		// Fallback to a temporary directory if home cannot be determined.
@@ -113,25 +95,6 @@ func getUnixCacheDir() string {
 	}
 
 	return filepath.Join(homeDir, dotCache, appName)
-}
-
-// GetCacheDir returns the application's cache directory, respecting environment variables
-// and OS conventions.
-func GetCacheDir() string {
-	// Honor the user-defined CACHE_DIR if it's set.
-	if cacheDir := os.Getenv(envCacheDir); cacheDir != "" {
-		return cacheDir
-	}
-
-	// Use platform-specific logic to determine the default cache directory.
-	switch runtime.GOOS {
-	case osWindows:
-		return getWindowsCacheDir()
-	case osDarwin:
-		return getDarwinCacheDir()
-	default: // Linux and other Unix-like systems.
-		return getUnixCacheDir()
-	}
 }
 
 // EnsureDir ensures a directory exists at the given path, creating it if it doesn't.
@@ -239,12 +202,6 @@ func FormatDuration(seconds float64) string {
 // FormatFileSize formats a file size in a human-readable string (e.g., "1.2 GB", "500.5
 // MB").
 func FormatFileSize(bytes int64) string {
-	const (
-		kilobyte = 1024
-		megabyte = kilobyte * 1024
-		gigabyte = megabyte * 1024
-	)
-
 	switch {
 	case bytes >= gigabyte:
 		return fmt.Sprintf(formatGB, float64(bytes)/gigabyte)
@@ -281,22 +238,22 @@ func IsValidTextFile(filename string) bool {
 
 // GetFileExtension returns the file extension without the leading dot.
 func GetFileExtension(filename string) string {
-	return strings.TrimPrefix(filepath.Ext(filename), ".")
+	return strings.TrimPrefix(filepath.Ext(filename), dot)
 }
 
 // SanitizeFilename removes or replaces characters that are invalid in most filesystems.
 func SanitizeFilename(filename string) string {
 	// Create a replacer for improved performance and readability over a manual loop.
 	replacer := strings.NewReplacer(
-		"<", "_",
-		">", "_",
-		":", "_",
-		"\"", "_",
-		"/", "_",
-		"\\", "_",
-		"|", "_",
-		"?", "_",
-		"*", "_",
+		"<", invalidCharReplacement,
+		">", invalidCharReplacement,
+		":", invalidCharReplacement,
+		"\"", invalidCharReplacement,
+		"/", invalidCharReplacement,
+		"\\", invalidCharReplacement,
+		"|", invalidCharReplacement,
+		"?", invalidCharReplacement,
+		"*", invalidCharReplacement,
 	)
 
 	return replacer.Replace(filename)
