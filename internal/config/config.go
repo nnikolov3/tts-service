@@ -20,6 +20,9 @@ type NATSConfig struct {
 // TTSServiceConfig holds the specific configuration for the TTS service.
 type TTSServiceConfig struct {
 	ModelPath      string  `toml:"model_path"`
+	SnacModelPath  string  `toml:"snac_model_path"`
+	Voice          string  `toml:"voice"`
+	BinaryPath     string  `toml:"binary_path"`
 	Temperature    float64 `toml:"temperature"`
 	TimeoutSeconds int     `toml:"timeout_seconds"`
 }

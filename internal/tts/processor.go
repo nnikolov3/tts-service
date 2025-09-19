@@ -9,15 +9,24 @@ import (
 // ErrNotImplemented is returned when a method is not yet implemented.
 var ErrNotImplemented = errors.New("not yet implemented")
 
+// Config holds the configuration for the ChatLLMProcessor.
+type Config struct {
+	BinaryPath    string
+	ModelPath     string
+	SnacModelPath string
+	Voice         string
+}
+
 // ChatLLMProcessor implements the core.TTSProcessor interface by calling the chatllm binary.
 type ChatLLMProcessor struct {
-	binaryPath string
+	config Config
 }
 
 // New creates a new ChatLLMProcessor.
-func New(binaryPath string) (*ChatLLMProcessor, error) {
+func New(cfg Config) (*ChatLLMProcessor, error) {
+	// We can add checks here to ensure the binary exists and is executable.
 	return &ChatLLMProcessor{
-		binaryPath: binaryPath,
+		config: cfg,
 	}, nil
 }
 

@@ -12,14 +12,26 @@ import (
 func TestNewChatLLMProcessor(t *testing.T) {
 	t.Parallel()
 
-	_, err := tts.New("dummy/path/to/chatllm")
+	cfg := tts.Config{
+		BinaryPath:    "dummy/path/to/chatllm",
+		ModelPath:     "",
+		SnacModelPath: "",
+		Voice:         "",
+	}
+	_, err := tts.New(cfg)
 	require.NoError(t, err)
 }
 
 func TestChatLLMProcessor_Process(t *testing.T) {
 	t.Parallel()
 
-	processor, err := tts.New("dummy/path/to/chatllm")
+	cfg := tts.Config{
+		BinaryPath:    "dummy/path/to/chatllm",
+		ModelPath:     "",
+		SnacModelPath: "",
+		Voice:         "",
+	}
+	processor, err := tts.New(cfg)
 	require.NoError(t, err)
 
 	// The Process method is not implemented yet, so we expect the specific error.
