@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/book-expert/logger"
+	"github.com/book-expert/tts-service/internal/core"
 	"github.com/book-expert/tts-service/internal/tts"
 	"github.com/stretchr/testify/require"
 )
@@ -13,11 +14,15 @@ import (
 func TestNewChatLLMProcessor(t *testing.T) {
 	t.Parallel()
 
-	cfg := tts.Config{
-		BinaryPath:    "dummy/path/to/chatllm",
-		ModelPath:     "",
-		SnacModelPath: "",
-		Voice:         "",
+	cfg := core.TTSConfig{
+		ModelPath:         "",
+		SnacModelPath:     "",
+		Voice:             "",
+		Seed:              0,
+		NGL:               0,
+		TopP:              0,
+		RepetitionPenalty: 0,
+		Temperature:       0,
 	}
 	testLogger, err := logger.New("/tmp", "test-log.log")
 	require.NoError(t, err)
@@ -29,11 +34,15 @@ func TestNewChatLLMProcessor(t *testing.T) {
 func TestChatLLMProcessor_Process(t *testing.T) {
 	t.Parallel()
 
-	cfg := tts.Config{
-		BinaryPath:    "dummy/path/to/chatllm",
-		ModelPath:     "",
-		SnacModelPath: "",
-		Voice:         "",
+	cfg := core.TTSConfig{
+		ModelPath:         "",
+		SnacModelPath:     "",
+		Voice:             "",
+		Seed:              0,
+		NGL:               0,
+		TopP:              0,
+		RepetitionPenalty: 0,
+		Temperature:       0,
 	}
 	testLogger, err := logger.New("/tmp", "test-log.log")
 	require.NoError(t, err)
@@ -43,6 +52,15 @@ func TestChatLLMProcessor_Process(t *testing.T) {
 
 	// The Process method will fail because the dummy binary path doesn't exist.
 	// We just check that it returns any error.
-	_, err = processor.Process(context.Background(), []byte("hello"))
+	_, err = processor.Process(context.Background(), []byte("hello"), core.TTSConfig{
+		ModelPath:         "",
+		SnacModelPath:     "",
+		Voice:             "",
+		Seed:              0,
+		NGL:               0,
+		TopP:              0,
+		RepetitionPenalty: 0,
+		Temperature:       0,
+	})
 	require.Error(t, err)
 }

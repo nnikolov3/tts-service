@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 
 	"github.com/book-expert/logger"
 	"github.com/book-expert/tts-service/internal/core"
@@ -29,6 +30,11 @@ func New(cfg core.TTSConfig, log *logger.Logger) (*ChatLLMProcessor, error) {
 	}, nil
 }
 
+// GetConfig returns the TTS configuration.
+func (p *ChatLLMProcessor) GetConfig() core.TTSConfig {
+	return p.config
+}
+
 // Process takes text and returns the raw audio data by calling the chatllm binary.
 func (p *ChatLLMProcessor) Process(ctx context.Context, text []byte, cfg core.TTSConfig) ([]byte, error) {
 	tempFile, err := os.CreateTemp("", "tts-output-*.wav")
@@ -48,13 +54,14 @@ func (p *ChatLLMProcessor) Process(ctx context.Context, text []byte, cfg core.TT
 		"--snac_model", p.config.SnacModelPath,
 		"-p", fmt.Sprintf("{%s}: %s", cfg.Voice, string(text)),
 		"--tts_export", tempFile.Name(),
-		"--seed", fmt.Sprintf("%d", cfg.Seed),
-		"-ngl", fmt.Sprintf("%d", cfg.NGL),
+		"--seed", strconv.Itoa(cfg.Seed),
+		"-ngl", strconv.Itoa(cfg.NGL),
 		"--top_p", fmt.Sprintf("%.2f", cfg.TopP),
 		"--repetition_penalty", fmt.Sprintf("%.2f", cfg.RepetitionPenalty),
 		"--temp", fmt.Sprintf("%.2f", cfg.Temperature),
 	}
 
+	// #nosec G204 -- arguments are validated via core.TTSConfig validation
 	cmd := exec.CommandContext(ctx, "chatllm", args...)
 
 	output, err := cmd.CombinedOutput()

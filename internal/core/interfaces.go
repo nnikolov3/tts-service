@@ -25,4 +25,5 @@ type TTSConfig struct {
 // TTSProcessor defines the interface for a text-to-speech processing engine.
 type TTSProcessor interface {
 	Process(ctx context.Context, text []byte, cfg TTSConfig) ([]byte, error)
+	GetConfig() TTSConfig
 }

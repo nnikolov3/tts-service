@@ -14,9 +14,6 @@ func TestLoadConfig(t *testing.T) {
 	t.Parallel()
 
 	tomlData := `
-[paths]
-base_logs_dir = "/var/log/book-expert/tts"
-
 [nats]
 url = "nats://127.0.0.1:4222"
 tts_stream_name = "TTS_JOBS"
@@ -36,7 +33,6 @@ timeout_seconds = 300
 	err := toml.Unmarshal([]byte(tomlData), &cfg)
 	require.NoError(t, err)
 
-	assert.Equal(t, "/var/log/book-expert/tts", cfg.Paths.BaseLogsDir)
 	assert.Equal(t, "nats://127.0.0.1:4222", cfg.NATS.URL)
 	assert.Equal(t, "TTS_JOBS", cfg.NATS.TTStreamName)
 	assert.Equal(t, "tts-workers", cfg.NATS.TTSConsumerName)

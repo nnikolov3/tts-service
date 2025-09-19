@@ -10,9 +10,10 @@ import (
 
 	"github.com/book-expert/events"
 	"github.com/book-expert/logger"
+	"github.com/book-expert/tts-service/internal/core"
 	"github.com/book-expert/tts-service/internal/worker"
 	"github.com/google/uuid"
-	"github.com/nats-io/nats-server/v2/server"
+
 	"github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/assert"
@@ -59,16 +60,44 @@ func (m *mockObjectStore) Upload(_ context.Context, key string, data []byte) err
 type mockTTSProcessor struct {
 	processShouldFail bool
 	processedText     []byte
+	processedCfg      core.TTSConfig
+	config            core.TTSConfig
 }
 
-func (m *mockTTSProcessor) Process(_ context.Context, text []byte) ([]byte, error) {
+func (m *mockTTSProcessor) GetConfig() core.TTSConfig {
+	return m.config
+}
+
+func (m *mockTTSProcessor) Process(_ context.Context, text []byte, cfg core.TTSConfig) ([]byte, error) {
 	if m.processShouldFail {
 		return nil, errMockProcess
 	}
 
 	m.processedText = text
+	m.processedCfg = cfg
 
 	return []byte("sample audio"), nil
+}
+
+func createTestNatsClient(t *testing.T) (*nats.Conn, func()) {
+	t.Helper()
+
+	opts := test.DefaultTestOptions
+	opts.Port = -1 // Use a random port
+	opts.JetStream = true
+	server := test.RunServer(&opts)
+
+	natsConnection, err := nats.Connect(server.ClientURL())
+	if err != nil {
+		t.Fatalf("Failed to connect to test NATS server: %v", err)
+	}
+
+	cleanup := func() {
+		server.Shutdown()
+		natsConnection.Close()
+	}
+
+	return natsConnection, cleanup
 }
 
 func setupTest(t *testing.T) (
@@ -91,9 +120,30 @@ func setupTest(t *testing.T) (
 	mockProcessor := &mockTTSProcessor{
 		processShouldFail: false,
 		processedText:     nil,
+		processedCfg: core.TTSConfig{
+			ModelPath:         "dummy_model_path",
+			SnacModelPath:     "dummy_snac_model_path",
+			Voice:             "dummy_voice",
+			Seed:              0,
+			NGL:               0,
+			TopP:              0.0,
+			RepetitionPenalty: 0.0,
+			Temperature:       0.0,
+		},
+		config: core.TTSConfig{
+			ModelPath:         "dummy_model_path",
+			SnacModelPath:     "dummy_snac_model_path",
+			Voice:             "dummy_voice",
+			Seed:              0,
+			NGL:               0,
+			TopP:              0.0,
+			RepetitionPenalty: 0.0,
+			Temperature:       0.0,
+		},
 	}
 
-	server, natsConnection := StartTestServer(t)
+	natsConnection, natsCleanup := createTestNatsClient(t)
+	t.Cleanup(natsCleanup)
 
 	jetstreamContext, err := natsConnection.JetStream()
 	require.NoError(t, err)
@@ -107,12 +157,6 @@ func setupTest(t *testing.T) (
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	// Important: Defer shutdown of the server using a cleanup function to ensure it runs after the test completes.
-	t.Cleanup(func() {
-		server.Shutdown()
-		natsConnection.Close()
-	})
 
 	return workerInstance, mockStore, mockProcessor, ctx, cancel, natsConnection
 }
@@ -137,10 +181,16 @@ func TestMessageHandler_Success(t *testing.T) {
 			UserID:     "",
 			TenantID:   "",
 		},
-		TextKey:    "test-text-key",
-		PNGKey:     "",
-		PageNumber: 0,
-		TotalPages: 0,
+		TextKey:           "test-text-key",
+		PNGKey:            "",
+		PageNumber:        0,
+		TotalPages:        0,
+		Voice:             "",
+		Seed:              0,
+		NGL:               0,
+		TopP:              0,
+		RepetitionPenalty: 0,
+		Temperature:       0,
 	}
 	eventData, err := json.Marshal(testEvent)
 	require.NoError(t, err)
@@ -165,21 +215,4 @@ func TestMessageHandler_Success(t *testing.T) {
 
 	shutdownErr := <-errChan
 	assert.NoError(t, shutdownErr, "worker.Run should not error on graceful shutdown")
-}
-
-// StartTestServer starts an in-memory NATS server for testing purposes.
-func StartTestServer(t *testing.T) (*server.Server, *nats.Conn) {
-	t.Helper()
-
-	opts := test.DefaultTestOptions
-	opts.Port = -1 // Use a random port
-	opts.JetStream = true
-	server := test.RunServer(&opts)
-
-	natsConnection, err := nats.Connect(server.ClientURL())
-	if err != nil {
-		t.Fatalf("Failed to connect to test NATS server: %v", err)
-	}
-
-	return server, natsConnection
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/book-expert/logger"
 	"github.com/book-expert/tts-service/internal/config"
+	"github.com/book-expert/tts-service/internal/core"
 	"github.com/book-expert/tts-service/internal/objectstore"
 	"github.com/book-expert/tts-service/internal/tts"
 	"github.com/book-expert/tts-service/internal/worker"
@@ -147,21 +148,6 @@ func run() error {
 	}
 
 	waitForShutdownSignal(log)
-	workerCancel()
-
-	log.Info("Shutdown complete.")
-
-	return nil
-}
-
-func main() {
-	err := run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Service exited with error: %v\n", err)
-		os.Exit(1)
-	}
-}
-aitForShutdownSignal(log)
 	workerCancel()
 
 	log.Info("Shutdown complete.")
