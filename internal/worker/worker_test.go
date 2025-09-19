@@ -71,7 +71,14 @@ func (m *mockTTSProcessor) Process(_ context.Context, text []byte) ([]byte, erro
 	return []byte("sample audio"), nil
 }
 
-func setupTest(t *testing.T) (*worker.NatsWorker, *mockObjectStore, *mockTTSProcessor, context.CancelFunc) {
+func setupTest(t *testing.T) (
+	*worker.NatsWorker,
+	*mockObjectStore,
+	*mockTTSProcessor,
+	context.Context,
+	context.CancelFunc,
+	*nats.Conn,
+) {
 	t.Helper()
 
 	mockStore := &mockObjectStore{
@@ -87,8 +94,6 @@ func setupTest(t *testing.T) (*worker.NatsWorker, *mockObjectStore, *mockTTSProc
 	}
 
 	server, natsConnection := StartTestServer(t)
-	defer server.Shutdown()
-	defer natsConnection.Close()
 
 	jetstreamContext, err := natsConnection.JetStream()
 	require.NoError(t, err)
@@ -101,18 +106,21 @@ func setupTest(t *testing.T) (*worker.NatsWorker, *mockObjectStore, *mockTTSProc
 	)
 	require.NoError(t, err)
 
-	_, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
 
-	return workerInstance, mockStore, mockProcessor, cancel
+	// Important: Defer shutdown of the server using a cleanup function to ensure it runs after the test completes.
+	t.Cleanup(func() {
+		server.Shutdown()
+		natsConnection.Close()
+	})
+
+	return workerInstance, mockStore, mockProcessor, ctx, cancel, natsConnection
 }
 
 func TestMessageHandler_Success(t *testing.T) {
 	t.Parallel()
 
-	workerInstance, mockStore, mockProcessor, cancel := setupTest(t)
-	defer cancel()
-
-	ctx, cancel := context.WithCancel(context.Background())
+	workerInstance, mockStore, mockProcessor, ctx, cancel, natsConnection := setupTest(t)
 	defer cancel()
 
 	errChan := make(chan error, 1)
@@ -137,7 +145,6 @@ func TestMessageHandler_Success(t *testing.T) {
 	eventData, err := json.Marshal(testEvent)
 	require.NoError(t, err)
 
-	_, natsConnection := StartTestServer(t)
 	replyMsg, err := natsConnection.Request("test_subject", eventData, 5*time.Second)
 	require.NoError(t, err, "Request should succeed and receive a reply")
 
