@@ -5,6 +5,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/book-expert/logger"
 	"github.com/book-expert/tts-service/internal/tts"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,10 @@ func TestNewChatLLMProcessor(t *testing.T) {
 		SnacModelPath: "",
 		Voice:         "",
 	}
-	_, err := tts.New(cfg)
+	testLogger, err := logger.New("/tmp", "test-log.log")
+	require.NoError(t, err)
+
+	_, err = tts.New(cfg, testLogger)
 	require.NoError(t, err)
 }
 
@@ -31,11 +35,14 @@ func TestChatLLMProcessor_Process(t *testing.T) {
 		SnacModelPath: "",
 		Voice:         "",
 	}
-	processor, err := tts.New(cfg)
+	testLogger, err := logger.New("/tmp", "test-log.log")
 	require.NoError(t, err)
 
-	// The Process method is not implemented yet, so we expect the specific error.
+	processor, err := tts.New(cfg, testLogger)
+	require.NoError(t, err)
+
+	// The Process method will fail because the dummy binary path doesn't exist.
+	// We just check that it returns any error.
 	_, err = processor.Process(context.Background(), []byte("hello"))
 	require.Error(t, err)
-	require.Equal(t, tts.ErrNotImplemented, err)
 }

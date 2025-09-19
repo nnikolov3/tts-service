@@ -2,46 +2,127 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/book-expert/logger"
 	"github.com/book-expert/tts-service/internal/config"
+	"github.com/book-expert/tts-service/internal/objectstore"
+	"github.com/book-expert/tts-service/internal/tts"
+	"github.com/book-expert/tts-service/internal/worker"
+	"github.com/nats-io/nats.go"
 )
 
 func setupLogger(logPath string) (*logger.Logger, error) {
-	log, err := logger.New(logPath, "tts-service-bootstrap.log")
+	log, err := logger.New(logPath, "tts-service.log")
 	if err != nil {
-		return nil, fmt.Errorf("failed to create bootstrap logger: %w", err)
+		return nil, fmt.Errorf("failed to create logger: %w", err)
 	}
 
 	return log, nil
 }
 
-func run() error {
-	// 1. Create a temporary logger for the bootstrap process
+func bootstrap() (*config.Config, *logger.Logger, error) {
 	bootstrapLog, err := setupLogger(os.TempDir())
 	if err != nil {
-		// If bootstrap logger fails, we can only print to stderr
 		fmt.Fprintf(os.Stderr, "FATAL: Failed to create bootstrap logger: %v\n", err)
 
-		return err
+		return nil, nil, err
 	}
 
 	bootstrapLog.Info("Bootstrap logger created.")
 
-	// 2. Load configuration using the central configurator
 	cfg, err := config.Load(bootstrapLog)
 	if err != nil {
 		bootstrapLog.Error("Failed to load configuration: %v", err)
 
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return nil, nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
 	bootstrapLog.Info("Configuration loaded successfully.")
 
-	// 3. Initialize the final logger based on the loaded configuration
-	finalLog, err := setupLogger(cfg.Paths.BaseLogsDir)
+	return cfg, bootstrapLog, nil
+}
+
+func startWorker(ctx context.Context, cfg *config.Config, log *logger.Logger) (context.CancelFunc, error) {
+	natsConnection, err := nats.Connect(cfg.NATS.URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
+	}
+
+	jetstreamContext, err := natsConnection.JetStream()
+	if err != nil {
+		natsConnection.Close()
+
+		return nil, fmt.Errorf("failed to get JetStream context: %w", err)
+	}
+
+	store, err := objectstore.New(jetstreamContext, cfg.NATS.AudioObjectStoreBucket)
+	if err != nil {
+		natsConnection.Close()
+
+		return nil, fmt.Errorf("failed to create object store: %w", err)
+	}
+
+	processor, err := tts.New(core.TTSConfig{
+		ModelPath:         cfg.TTS.ModelPath,
+		SnacModelPath:     cfg.TTS.SnacModelPath,
+		Voice:             cfg.TTS.Voice,
+		Seed:              cfg.TTS.Seed,
+		NGL:               cfg.TTS.NGL,
+		TopP:              cfg.TTS.TopP,
+		RepetitionPenalty: cfg.TTS.RepetitionPenalty,
+		Temperature:       cfg.TTS.Temperature,
+	}, log)
+	if err != nil {
+		natsConnection.Close()
+
+		return nil, fmt.Errorf("failed to create TTS processor: %w", err)
+	}
+
+	natsWorker, err := worker.NewNatsWorker(
+		natsConnection, jetstreamContext, cfg.NATS.TextProcessedSubject, store, processor, log,
+	)
+	if err != nil {
+		natsConnection.Close()
+
+		return nil, fmt.Errorf("failed to create NATS worker: %w", err)
+	}
+
+	workerCtx, workerCancel := context.WithCancel(ctx)
+
+	go func() {
+		defer natsConnection.Close()
+
+		runErr := natsWorker.Run(workerCtx)
+		if runErr != nil {
+			log.Error("NATS worker stopped with error: %v", runErr)
+			workerCancel() // Ensure other dependent goroutines are stopped
+		}
+	}()
+
+	log.System("TTS-Service successfully initialized. Listening for jobs on subject: %s", cfg.NATS.TextProcessedSubject)
+
+	return workerCancel, nil
+}
+
+func waitForShutdownSignal(log *logger.Logger) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+	log.Info("Shutdown signal received, gracefully shutting down...")
+}
+
+func run() error {
+	cfg, bootstrapLog, err := bootstrap()
+	if err != nil {
+		return err
+	}
+
+	log, err := setupLogger(os.TempDir())
 	if err != nil {
 		bootstrapLog.Error("Failed to create final logger: %v", err)
 
@@ -49,18 +130,41 @@ func run() error {
 	}
 
 	defer func() {
-		closeErr := finalLog.Close()
+		closeErr := log.Close()
 		if closeErr != nil {
-			fmt.Fprintf(os.Stderr, "error closing final logger: %v\n", closeErr)
+			fmt.Fprintf(os.Stderr, "error closing logger: %v\n", closeErr)
 		}
 	}()
 
-	// 4. Log confirmation message
-	logMessage := "TTS-Service successfully initialized. Listening for jobs on subject: %s"
-	finalLog.System(logMessage, cfg.NATS.TextProcessedSubject)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	// Future steps will involve setting up NATS and the main worker loop here.
-	// For now, the service will start, log, and then exit.
+	workerCancel, err := startWorker(ctx, cfg, log)
+	if err != nil {
+		log.Error("Failed to start worker: %v", err)
+
+		return err
+	}
+
+	waitForShutdownSignal(log)
+	workerCancel()
+
+	log.Info("Shutdown complete.")
+
+	return nil
+}
+
+func main() {
+	err := run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Service exited with error: %v\n", err)
+		os.Exit(1)
+	}
+}
+aitForShutdownSignal(log)
+	workerCancel()
+
+	log.Info("Shutdown complete.")
 
 	return nil
 }

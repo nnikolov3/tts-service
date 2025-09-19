@@ -19,24 +19,21 @@ type NATSConfig struct {
 
 // TTSServiceConfig holds the specific configuration for the TTS service.
 type TTSServiceConfig struct {
-	ModelPath      string  `toml:"model_path"`
-	SnacModelPath  string  `toml:"snac_model_path"`
-	Voice          string  `toml:"voice"`
-	BinaryPath     string  `toml:"binary_path"`
-	Temperature    float64 `toml:"temperature"`
-	TimeoutSeconds int     `toml:"timeout_seconds"`
-}
-
-// PathsConfig holds the configuration for file paths.
-type PathsConfig struct {
-	BaseLogsDir string `toml:"base_logs_dir"`
+	ModelPath         string  `toml:"model_path"`
+	SnacModelPath     string  `toml:"snac_model_path"`
+	Voice             string  `toml:"voice"`
+	Temperature       float64 `toml:"temperature"`
+	TimeoutSeconds    int     `toml:"timeout_seconds"`
+	Seed              int     `toml:"seed"`
+	NGL               int     `toml:"ngl"`
+	TopP              float64 `toml:"top_p"`
+	RepetitionPenalty float64 `toml:"repetition_penalty"`
 }
 
 // Config is the root configuration structure.
 type Config struct {
-	NATS  NATSConfig       `toml:"nats"`
-	TTS   TTSServiceConfig `toml:"tts_service"`
-	Paths PathsConfig      `toml:"paths"`
+	NATS NATSConfig       `toml:"nats"`
+	TTS  TTSServiceConfig `toml:"tts_service"`
 }
 
 // Load loads the configuration for the tts-service.
